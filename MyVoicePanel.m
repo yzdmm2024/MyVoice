@@ -103,7 +103,7 @@
     [self.panel addSubview:self.voiceSeg];
 
     UIButton *send = [UIButton buttonWithType:UIButtonTypeSystem];
-    [send setTitle:@"发送语音" forState:UIControlStateNormal];
+    [send setTitle:@"① 合成语音" forState:UIControlStateNormal];
     send.backgroundColor = [UIColor systemBlueColor]; [send setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     send.frame = CGRectMake(12, 162, 120, 40); send.layer.cornerRadius = 8;
     [send addTarget:self action:@selector(onSend) forControlEvents:UIControlEventTouchUpInside];

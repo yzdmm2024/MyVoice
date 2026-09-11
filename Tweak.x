@@ -1,6 +1,7 @@
 #import "MyVoiceCommon.h"
 #import "MyVoiceManager.h"
 #import "MyVoiceResolver.h"
+#import "MyVoiceRecorder.h"
 #import <objc/runtime.h>
 
 // ============================================================
@@ -39,45 +40,24 @@
 %end
 
 // ============================================================
-// hook 二：抓 CMessageMgr -AddMsg:MsgWrap: 的第一个参数（2.0.17 直发链路用）
+// hook 二：微信录音管线（2.1.0 起，取代 2.0.17 的 AddMsg 直塞）
 //
-// 实测（v32@0:8@16@24）：两个参数都是对象。微信自己发/收消息时第一个参数永远是同一个
-// 常量对象，而直发语音要复用这个对象 —— 所以在这里抓一份留着。
-// 用运行时 hook（不写 @interface）：CMessageMgr 是私有类，%hook 需要接口声明，
-// 用 method_setImplementation 更省事，也不影响别人后续 swizzle。
+// 语音能不能发出去、有没有声音，取决于音频有没有走微信自己的录音→编码→上传链。
+// 所以这里不再 hook 消息接口，而是给 AudioQueueNewInput 打补丁：
+// 用户按住说话时，MyVoiceRecorder 会把麦克风数据整块换成已合成好的 TTS 数据，
+// 松手后由微信自己完成 SILK 编码 / 落盘 / 入库 / 上传 / 气泡（详见 MyVoiceRecorder.m）。
 // ============================================================
-
-static IMP g_mvOrigAddMsg = NULL;
-static BOOL g_mvAddMsgHooked = NO;
-
-static void mv_AddMsg(id self, SEL _cmd, id arg0, id wrap) {
-    @autoreleasepool {
-        @try { [MyVoiceResolver captureAddMsgArg0:arg0]; } @catch (NSException *e) {}
-    }
-    if (g_mvOrigAddMsg) ((void(*)(id,SEL,id,id))g_mvOrigAddMsg)(self, _cmd, arg0, wrap);
-}
-
-static void MVInstallAddMsgHook(void) {
-    if (g_mvAddMsgHooked) return;
-    Class c = objc_getClass("CMessageMgr");
-    if (!c) return;
-    Method m = class_getInstanceMethod(c, NSSelectorFromString(@"AddMsg:MsgWrap:"));
-    if (!m) return;
-    g_mvOrigAddMsg = method_getImplementation(m);
-    method_setImplementation(m, (IMP)mv_AddMsg);
-    g_mvAddMsgHooked = YES;
-    MVLog(@"[hook] 已挂 CMessageMgr -AddMsg:MsgWrap:（抓 arg0）");
-}
 
 %ctor {
     @autoreleasepool {
-        MVLog(@"载入 我的语音 v2.0.17（直发链路重做：MJSilkCodec 实例编码 + CMessageWrap/MsgMgr 真接口）");
+        MVLog(@"载入 我的语音 v2.1.0（录音管线劫持：TTS 音频直接喂进微信录音链，杜绝空白语音）");
         [[MyVoiceManager shared] setup];
 
-        // 微信冷启动时类可能还没注册好，重试几次
-        for (int i = 0; i < 8; i++) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((0.5 + i * 0.5) * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{ MVInstallAddMsgHook(); });
+        // AudioQueueNewInput 补丁：随时可装，微信录音时才调用它。
+        // 微信冷启动时 CoreAudio 已就绪，仍分几次重试（防止极早期调用尚未可用）。
+        for (int i = 0; i < 5; i++) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((0.5 + i * 1.0) * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ [MyVoiceRecorder install]; });
         }
     }
 }

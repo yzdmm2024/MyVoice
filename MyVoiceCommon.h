@@ -10,8 +10,11 @@
 // 跨进程通知名（设置面板改完发，微信里的面板监听）
 #define MV_CHANGED_NOTIFY "com.yzdmm2024.myvoice/settings"
 
-// 微信语音标准：24kHz / 单声道 / S16。SILK 编码 + 直发都按这个来。
-#define MV_WECHAT_SR 24000.0
+// 微信录音管线实测采样率：**16kHz / 单声道 / S16**（2.1.0 起改用录音管线劫持后校正）。
+// 证据：AudioQueueNewInput 申请格式 + 实测 buffer 8000B/250ms（= 32000 B/s = 16000 Hz × 2B）。
+// ⚠️ 2.0.17 之前这里写的是 24000（当时是"自己编码 SILK 再直发"的推测值），
+//    改成录音管线劫持后必须以管线真实采样率为准，否则音调/时长会错位。
+#define MV_WECHAT_SR 16000.0
 
 static inline NSUserDefaults* MVPrefs(void) {
     static NSUserDefaults *d;

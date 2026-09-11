@@ -43,7 +43,8 @@ static void MVSettingsChanged(CFNotificationCenterRef center, void *observer,
         return;
     }
     MVLog(@"发送请求：talker=%@ text=%@", talker, text);
-    [self toast:[NSString stringWithFormat:@"正在合成并发送给 %@", talker]];
+    // 2.1.0：不再直接发 —— 先把合成好的音频装填进录音管线，
+    // 用户回到聊天页按住说话时才会真正发出去（见 MyVoiceSender 的说明）。
     [[MyVoiceSender shared] sendText:text toTalker:talker voiceID:MVCurrentVoiceID()];
 }
 

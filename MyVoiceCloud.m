@@ -96,7 +96,7 @@ static NSError* MVErr(NSString *msg) {
             @"text": text,
             @"voice": voiceID,
             @"format": @"wav",
-            @"sample_rate": @24000
+            @"sample_rate": @16000
         }
     };
     NSData *json = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
@@ -301,7 +301,7 @@ static NSError* MVErr(NSString *msg) {
             @"preview_text": previewText.length ? previewText : @"你好，这是用我的新音色说的话。",
             @"prefix": @"myvoice"
         },
-        @"parameters": @{ @"sample_rate": @24000, @"response_format": @"wav" }
+        @"parameters": @{ @"sample_rate": @16000, @"response_format": @"wav" }
     };
     NSData *json = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 
