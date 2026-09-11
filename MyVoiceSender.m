@@ -100,7 +100,18 @@ static OSStatus MV_AudioQueueNewInput(const AudioStreamBasicDescription* inForma
     UIViewController *vc = [self findChatVC:chatCls];
     if (!vc) { MVLog(@"未找到聊天 VC，无法触发录音"); [MyVoiceSender cleanup]; return; }
     SEL sel = [MyVoiceResolver selectorWithCandidates:[vc class] names:[MyVoiceResolver recordStartCandidates]];
-    if (!sel) { MVLog(@"未解析到录音开始方法"); [MyVoiceSender cleanup]; return; }
+    if (!sel) {
+        MVLog(@"未解析到录音开始方法，VC=%@ 候选方法含 Record/Voice/Send 的有：", NSStringFromClass([vc class]));
+        unsigned int mc=0; Method *ms = class_copyMethodList([vc class], &mc);
+        for (unsigned int i=0;i<mc;i++){
+            NSString *sn = NSStringFromSelector(method_getName(ms[i]));
+            if ([sn containsString:@"ecord"]||[sn containsString:@"oice"]||[sn containsString:@"end"]||[sn containsString:@"Send"]) {
+                MVLog(@"   %@", sn);
+            }
+        }
+        free(ms);
+        [MyVoiceSender cleanup]; return;
+    }
     NSMethodSignature *sig = [[vc class] instanceMethodSignatureForSelector:sel];
     if (!sig) { MVLog(@"无方法签名：%@", NSStringFromSelector(sel)); [MyVoiceSender cleanup]; return; }
     NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];

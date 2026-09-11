@@ -31,6 +31,7 @@
     NSString *talker = [MyVoiceResolver currentTalker];
     if (!talker.length) {
         MVLog(@"未识别到聊天对象");
+        MVLog(@"%@", [MyVoiceResolver debugChatInfo]);
         [self toast:@"未识别到聊天对象，请先进入一个聊天"];
         return;
     }
