@@ -78,6 +78,13 @@ static OSStatus MV_AudioQueueNewInput(const AudioStreamBasicDescription *inForma
 
 @implementation MyVoiceSender
 
++ (instancetype)shared {
+    static id s;
+    static dispatch_once_t t;
+    dispatch_once(&t, ^{ s = [[self alloc] init]; });
+    return s;
+}
+
 #pragma mark - 会话身份捕获 / 持久化
 
 + (void)persistSessionFrom:(id)from to:(id)to info:(id)info {
