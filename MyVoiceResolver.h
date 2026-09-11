@@ -20,6 +20,8 @@
 // 当前聊天对象 wxid（多路径解析，见 .m 里的优先级注释）
 + (NSString*)currentTalker;
 + (UIViewController*)topViewController;
+// 取一个可用窗口（多 scene 兼容）。⚠️ 必须在主线程调用。
++ (UIWindow*)anyWindow;
 
 // 从一个「聊天 VC」上解析会话 wxid（微信 8.0.75 实测：getChatUserName / GetContact /
 // m_contact / m_delegate.m_contact / 当前会话消息 五条路）

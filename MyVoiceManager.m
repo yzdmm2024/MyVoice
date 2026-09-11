@@ -58,7 +58,13 @@ static void MVSettingsChanged(CFNotificationCenterRef center, void *observer,
 }
 
 - (void)toast:(NSString*)msg {
-    UIWindow *w = UIApplication.sharedApplication.keyWindow;
+    // ★ 关键：合成回调在后台队列上调用本方法，这里必须回主线程再加视图，
+    //   否则会撞 CoreAutoLayout 的「非主线程」断言直接 abort（2.0.14 的闪退就是这么来的）。
+    if (![NSThread isMainThread]) {
+        MVOnMain(^{ [self toast:msg]; });
+        return;
+    }
+    UIWindow *w = [MyVoiceResolver anyWindow];
     if (!w) return;
     UILabel *l = [[UILabel alloc] init];
     l.text = msg; l.font = [UIFont systemFontOfSize:13];

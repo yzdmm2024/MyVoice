@@ -2,6 +2,7 @@
 #import "MyVoiceCommon.h"
 #import "MyVoiceEngine.h"
 #import "MyVoiceManager.h"
+#import "MyVoiceResolver.h"
 #import "MyVoiceCloneController.h"
 #import <UIKit/UIKit.h>
 
@@ -27,8 +28,10 @@
 }
 
 - (void)show {
+    // 面板可能被跨进程通知 / 后台回调触发，统一回主线程再动 UIKit
+    if (![NSThread isMainThread]) { MVOnMain(^{ [self show]; }); return; }
     if (self.fab) return;
-    UIWindow *w = UIApplication.sharedApplication.keyWindow;
+    UIWindow *w = [MyVoiceResolver anyWindow];
     if (!w) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [self show]; }); return; }
 
     self.fab = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -45,13 +48,14 @@
 }
 
 - (void)hide {
+    if (![NSThread isMainThread]) { MVOnMain(^{ [self hide]; }); return; }
     [self stopSessionTimer];
     [self.fab removeFromSuperview]; self.fab = nil;
     [self.panel removeFromSuperview]; self.panel = nil;
 }
 
 - (void)buildPanel {
-    UIWindow *w = UIApplication.sharedApplication.keyWindow;
+    UIWindow *w = [MyVoiceResolver anyWindow];
     self.panel = [[UIView alloc] initWithFrame:CGRectMake(w.bounds.size.width - MV_PANEL_W - 20,
                                                          w.bounds.size.height - MV_PANEL_H - 90,
                                                          MV_PANEL_W, MV_PANEL_H)];
@@ -218,7 +222,7 @@
 - (void)onClone {
     MyVoiceCloneController *vc = [[MyVoiceCloneController alloc] init];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-    UIViewController *top = UIApplication.sharedApplication.keyWindow.rootViewController;
+    UIViewController *top = [MyVoiceResolver anyWindow].rootViewController;
     while (top.presentedViewController) top = top.presentedViewController;
     [top presentViewController:nav animated:YES completion:nil];
 }
@@ -228,7 +232,7 @@
     [btn addGestureRecognizer:p];
 }
 - (void)drag:(UIPanGestureRecognizer*)g {
-    UIWindow *w = UIApplication.sharedApplication.keyWindow;
+    UIWindow *w = [MyVoiceResolver anyWindow];
     CGPoint t = [g translationInView:w];
     CGRect f = self.fab.frame;
     f.origin.x += t.x; f.origin.y += t.y;

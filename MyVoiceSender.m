@@ -56,6 +56,9 @@
     [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"正在合成并发送给 %@", peer]];
 
     [engine synthesizeText:text voiceID:vid completion:^(NSData *pcm, NSError *err){
+        // ⚠️ 这个 block 一定在后台线程执行（离线引擎=全局队列，云端引擎=NSURLSession 回调）。
+        //    SILK 编码是纯 CPU 活，留在后台；但凡碰到微信内部接口/UI 的部分，
+        //    必须 MVOnMain 回主线程 —— 否则微信 swizzle 过的 -addSubview: 会撞 AutoLayout 断言闪退。
         if (!pcm || err) {
             MVLog(@"合成失败 %@，回退占位音", err);
             pcm = [MyVoiceEngine placeholderPCM:text];
@@ -68,7 +71,7 @@
             [[MyVoiceManager shared] toast:@"SILK 编码失败（请用 frida 脚本确认微信 SILK 符号）"];
             return;
         }
-        [self directSend:silk toTalker:peer];
+        MVOnMain(^{ [self directSend:silk toTalker:peer]; });
     }];
 }
 

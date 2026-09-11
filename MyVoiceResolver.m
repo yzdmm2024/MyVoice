@@ -94,6 +94,25 @@
     return roots.firstObject;
 }
 
+// 取一个可用窗口。keyWindow 在 iOS13+ 多 scene 下经常是 nil（尤其微信这种多窗口 app），
+// 所以逐层兜底。⚠️ 只能在主线程调用（读 windows/connectedScenes 属 UIKit 访问）。
++ (UIWindow*)anyWindow {
+    UIWindow *kw = UIApplication.sharedApplication.keyWindow;
+    if (kw) return kw;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        for (UIWindow *w in ((UIWindowScene*)scene).windows) {
+            if (w.isKeyWindow) return w;
+        }
+    }
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        UIWindow *w = ((UIWindowScene*)scene).windows.firstObject;
+        if (w) return w;
+    }
+    return UIApplication.sharedApplication.windows.firstObject;
+}
+
 #pragma mark - 聊天对象识别（微信 8.0.75 实测路径，见下方注释）
 
 // ============================================================

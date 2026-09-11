@@ -154,3 +154,17 @@ static inline NSString* MVOSSSk(void)       { return MVGetStr(@"ossSk"); }
 
 // 触发方式：0 = 悬浮按钮（默认）；1 = 长按录音键
 static inline NSInteger MVTrigger(void){ id v = MVGet(@"trigger"); return v ? [v integerValue] : 0; }
+
+// ---- UI 线程安全（2.0.15 修的崩溃）----
+// 引擎合成回调【一定不在主线程】：
+//   · 离线 AVSpeech 引擎：dispatch_get_global_queue(QOS_CLASS_DEFAULT) 上跑（队列名 com.apple.root.default-qos）
+//   · 云端 CosyVoice 引擎：NSURLSession 的 completionHandler 上跑
+// 这些回调里的任一 UIKit 调用（哪怕只是 [window addSubview:]）都会触发 CoreAutoLayout 的
+//   _AssertAutoLayoutOnAllowedThreadsOnly 断言 → 抛 NSException → 微信的 uncaught handler → abort()
+// 实测崩溃栈：AVSEngine -synthesizeText: → Sender(block) → Manager -toast: → WeChat swizzled -addSubview: → 💥
+// 所以：凡是从回调/后台队列能碰到的 UI 路径，一律先过 MVOnMain。
+static inline void MVOnMain(dispatch_block_t blk) {
+    if (!blk) return;
+    if ([NSThread isMainThread]) blk();
+    else dispatch_async(dispatch_get_main_queue(), blk);
+}
