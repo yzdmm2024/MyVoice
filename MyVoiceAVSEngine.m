@@ -1,10 +1,38 @@
 #import "MyVoiceEngine.h"
+#import "MyVoiceCommon.h"
 #import <AVFoundation/AVFoundation.h>
 
 // 真·离线中文 TTS：直接吃 iOS 系统 AVSpeechSynthesizer（设备内置 zh-CN 语音，全程在端，
-// 不联网、不塞模型权重），经 AVAudioConverter 降采样到 16kHz 单声道 S16，喂给微信录音管线。
+// 不联网、不塞模型权重），自己写浮点线性重采样到 16kHz 单声道 S16，喂给微信录音管线。
 // 比 Flite 中文效果好得多，且零依赖。需要 iOS 13+ 的 writeUtterance:toBufferCallback:。
+// 注意：刻意不碰 AVAudioConverter / AVAudioPCMBuffer 构造器——它们在新 SDK（iOS17.x）被
+// 可用性门槛拦掉，自己重采样最稳、跨 SDK 不翻车。
+@interface MyVoiceAVSEngine : NSObject <MyVoiceEngine>
+@end
+
 @implementation MyVoiceAVSEngine
+
+// 浮点单声道线性重采样：src(rate=srcRate) -> dst(rate=dstRate)
++ (NSData*)resampleFloat:(const float*)src frames:(NSUInteger)nSrc srcRate:(double)srcRate dstRate:(double)dstRate {
+    if (nSrc == 0) return nil;
+    if (srcRate <= 0 || dstRate <= 0) return nil;
+    double ratio = dstRate / srcRate;               // 如 16000/24000 = 2/3
+    NSUInteger nDst = (NSUInteger)(nSrc * ratio);
+    if (nDst == 0) return nil;
+    NSMutableData *out = [NSMutableData dataWithLength:nDst * sizeof(short)];
+    short *od = (short*)out.mutableBytes;
+    for (NSUInteger i = 0; i < nDst; i++) {
+        double pos = (double)i / ratio;             // 源位置（浮点）
+        NSUInteger idx = (NSUInteger)pos;
+        double frac = pos - (double)idx;
+        float a = src[idx];
+        float b = (idx + 1 < nSrc) ? src[idx + 1] : src[idx];
+        float v = a * (1.0f - (float)frac) + b * (float)frac;
+        if (v > 1.0f) v = 1.0f; else if (v < -1.0f) v = -1.0f;
+        od[i] = (short)(v * 32767.0f);
+    }
+    return out;
+}
 
 - (void)synthesizeText:(NSString*)text
                voiceID:(NSString*)voiceID
@@ -34,7 +62,6 @@
             AVSpeechSynthesizer *syn = [[AVSpeechSynthesizer alloc] init];
 
             NSMutableData *srcFloats = [NSMutableData data]; // 累积 float32 单声道样本
-            __block AVAudioFormat *srcFmt = nil;
             __block double srcRate = 24000.0;
             __block NSUInteger totalFrames = 0;
             __block BOOL gotAny = NO;
@@ -44,7 +71,6 @@
                 AVAudioPCMBuffer *pcm = (AVAudioPCMBuffer*)buffer;
                 UInt32 frames = pcm.frameLength;
                 if (frames == 0) return;
-                if (!srcFmt) srcFmt = pcm.format;
                 srcRate = pcm.format.sampleRate;
                 gotAny = YES;
                 if (pcm.format.commonFormat == AVAudioPCMFormatFloat32) {
@@ -63,55 +89,22 @@
 
             if (!gotAny || totalFrames == 0) {
                 if (completion) completion(nil, [NSError errorWithDomain:@"MyVoiceAVS" code:1
-                                    userInfo:@{NSLocalizedDescriptionKey:@"AVS 无输出（设备可能缺 zh-CN 语音，请在系统设置-辅助功能-语音内容中下载）"}]);
+                                    userInfo:@{NSLocalizedDescriptionKey:@"AVS 无输出（设备可能缺 zh-CN 语音，请在 设置-辅助功能-语音内容 中下载）"}]);
                 return;
             }
-
-            // 拼成整段 float 源 buffer，再一次性降采样到 16k S16
-            AVAudioFormat *sf = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
-                                                                sampleRate:srcRate
-                                                                channels:1
-                                                             interleaved:NO];
-            AVAudioPCMBuffer *srcBuf = [[AVAudioPCMBuffer alloc] initWithFormat:sf capacity:totalFrames];
-            memcpy(srcBuf.floatChannelData[0], srcFloats.bytes, (NSUInteger)totalFrames * sizeof(float));
-            srcBuf.frameLength = totalFrames;
 
             double dstRate = [MyVoiceEngine sampleRate]; // 16000
-            AVAudioFormat *df = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16
-                                                                sampleRate:dstRate
-                                                                channels:1
-                                                             interleaved:NO];
-            AVAudioConverter *conv = [[AVAudioConverter alloc] initFrom:sf to:df];
-            if (!conv) {
+            NSData *out = [MyVoiceAVSEngine resampleFloat:(const float*)srcFloats.bytes
+                                                   frames:totalFrames
+                                                 srcRate:srcRate
+                                                 dstRate:dstRate];
+            if (!out || out.length == 0) {
                 if (completion) completion(nil, [NSError errorWithDomain:@"MyVoiceAVS" code:2
-                                    userInfo:@{NSLocalizedDescriptionKey:@"创建重采样器失败"}]);
-                return;
-            }
-            NSUInteger outCap = (NSUInteger)(totalFrames * dstRate / srcRate) + 64;
-            AVAudioPCMBuffer *dstBuf = [[AVAudioPCMBuffer alloc] initWithFormat:df capacity:outCap];
-            NSError *cerr = nil;
-            __block AVAudioPCMBuffer *sbuf = srcBuf;
-            __block BOOL srcConsumed = NO;
-            AVAudioConverterInputBlock pull = ^AVAudioBuffer*(AVAudioConverterInputStatus *status, AVAudioPacketCount *packetCount){
-                if (srcConsumed) {
-                    *status = AVAudioConverterInputStatusEndOfStream;
-                    *packetCount = 0;
-                    return nil;
-                }
-                srcConsumed = YES;
-                *status = AVAudioConverterInputStatusHaveData;
-                *packetCount = sbuf.frameLength;
-                return sbuf;
-            };
-            BOOL ok = [conv convertToBuffer:dstBuf error:&cerr withInputFromBlock:pull];
-            if (!ok || cerr) {
-                if (completion) completion(nil, cerr ?: [NSError errorWithDomain:@"MyVoiceAVS" code:3
                                     userInfo:@{NSLocalizedDescriptionKey:@"重采样失败"}]);
                 return;
             }
-            UInt32 outFrames = dstBuf.frameLength;
-            NSData *out = [NSData dataWithBytes:dstBuf.int16ChannelData[0] length:(NSUInteger)outFrames * sizeof(short)];
-            MVLog(@"AVS 合成完成：src %.0fHz/%lu帧 → dst %.0fHz/%u帧", srcRate, (unsigned long)totalFrames, dstRate, outFrames);
+            MVLog(@"AVS 合成完成：src %.0fHz/%lu帧 → dst %.0fHz/%lu帧",
+                  srcRate, (unsigned long)totalFrames, dstRate, (unsigned long)(out.length / 2));
             if (completion) completion(out, nil);
         }
     });
