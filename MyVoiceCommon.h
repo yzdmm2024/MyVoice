@@ -3,7 +3,71 @@
 #import <objc/message.h>
 
 // 统一日志前缀，方便在设备 syslog 里过滤调试。
-#define MVLog(fmt, ...) NSLog(@"[MyVoice] " fmt, ##__VA_ARGS__)
+//
+// 2.1.0 起日志同时落盘 —— 录音管线劫持是否生效、微信录音器的真实采样率这些关键事实
+// 只能在真机上看到，而让用户抓 syslog 太麻烦。落盘后 Filza 直接打开即可。
+//   · 优先写 /var/jb/var/mobile/Library/Preferences/com.yzdmm2024.myvoice.log（rootless jbroot）
+//   · 写不进去就退微信自己容器的 Documents/MyVoice.log
+// 超过 512KB 自动清空重来，避免无限膨胀。
+static inline NSString* MVLogFilePath(void) {
+    static NSString *path = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSArray *cands = @[
+            @"/var/jb/var/mobile/Library/Preferences/com.yzdmm2024.myvoice.log",
+            [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/MyVoice.log"],
+        ];
+        for (NSString *p in cands) {
+            [fm createDirectoryAtPath:[p stringByDeletingLastPathComponent]
+          withIntermediateDirectories:YES attributes:nil error:nil];
+            if ([fm fileExistsAtPath:p]) { path = p; break; }
+            if ([fm createFileAtPath:p contents:nil attributes:nil]) { path = p; break; }
+        }
+    });
+    return path;
+}
+
+static inline void MVLogAppend(NSString *line) {
+    NSString *path = MVLogFilePath();
+    if (!path.length || !line.length) return;
+    @synchronized(@"mv-log") {
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (!fh) return;
+        @try {
+            unsigned long long sz = [fh seekToEndOfFile];
+            if (sz > 512 * 1024) {                       // 防无限增长
+                [fh closeFile];
+                [@"" writeToFile:path atomically:NO encoding:NSUTF8StringEncoding error:nil];
+                fh = [NSFileHandle fileHandleForWritingAtPath:path];
+                if (!fh) return;
+                [fh seekToEndOfFile];
+            }
+            static NSDateFormatter *df = nil;
+            static dispatch_once_t once;
+            dispatch_once(&once, ^{
+                df = [[NSDateFormatter alloc] init];
+                df.dateFormat = @"MM-dd HH:mm:ss.SSS";
+            });
+            NSString *out = [NSString stringWithFormat:@"%@ %@\n",
+                             [df stringFromDate:[NSDate date]], line];
+            [fh writeData:[out dataUsingEncoding:NSUTF8StringEncoding]];
+            [fh closeFile];
+        } @catch (NSException *e) { /* 日志失败绝不能影响主流程 */ }
+    }
+}
+
+// MVLog：syslog + 落盘。普通代码路径用它。
+#define MVLog(fmt, ...) do { \
+    NSString *_mvS = [NSString stringWithFormat:@"[MyVoice] " fmt, ##__VA_ARGS__]; \
+    NSLog(@"%@", _mvS); \
+    MVLogAppend(_mvS); \
+} while (0)
+
+// MVLogS：只 NSLog 不落盘。★ 专供音频实时回调等对延迟敏感、不能做文件 IO 的地方。
+#define MVLogS(fmt, ...) do { \
+    NSLog(@"[MyVoice] " fmt, ##__VA_ARGS__); \
+} while (0)
 
 // 设置域（设置面板 + tweak 共用）
 #define MV_PREFS_ID @"com.yzdmm2024.myvoice"

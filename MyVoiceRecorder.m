@@ -83,7 +83,7 @@ static void MV_AQInputTrampoline(void *inUserData, AudioQueueRef inAQ,
                 if (g_mvArmAt > 0 && [[NSDate date] timeIntervalSince1970] - g_mvArmAt > kMVArmTimeout) {
                     g_mvArmed = NO;
                     g_mvFeed = nil;
-                    MVLog(@"[rec] 装填超时（%.0fs）自动取消", kMVArmTimeout);
+                    MVLogS(@"[rec] 装填超时（%.0fs）自动取消", kMVArmTimeout);
                 } else {
                     g_mvCbSeq++;
                     UInt32 bufSz = inBuffer->mAudioDataByteSize;
@@ -96,12 +96,12 @@ static void MV_AQInputTrampoline(void *inUserData, AudioQueueRef inAQ,
                             memset((char*)inBuffer->mAudioData + take, 0, bufSz - take);
                         g_mvOff += take;
                         if (g_mvCbSeq <= 3 || g_mvOff >= total)
-                            MVLog(@"[rec] 喂入 #%lu %luB (off=%lu/%lu)",
-                                  (unsigned long)g_mvCbSeq, (unsigned long)take,
-                                  (unsigned long)g_mvOff, (unsigned long)total);
+                            MVLogS(@"[rec] 喂入 #%lu %luB (off=%lu/%lu)",
+                                   (unsigned long)g_mvCbSeq, (unsigned long)take,
+                                   (unsigned long)g_mvOff, (unsigned long)total);
                         if (g_mvOff >= total) {
-                            MVLog(@"[rec] ✅ TTS 数据已全部进入录音管线（共 %lu 字节，%lu 次回调）",
-                                  (unsigned long)total, (unsigned long)g_mvCbSeq);
+                            MVLogS(@"[rec] OK TTS 数据已全部进入录音管线（共 %lu 字节，%lu 次回调）",
+                                   (unsigned long)total, (unsigned long)g_mvCbSeq);
                             g_mvArmAt = 0;   // 已喂完，不必再超时取消
                         }
                     } else if (bufSz) {
@@ -266,10 +266,11 @@ static OSStatus MV_AudioQueueNewInputWithDispatchQueue(const AudioStreamBasicDes
         [s appendFormat:@"录音管线采样率：%@（0 = 还没录过音）\n",
             g_mvPipeRate > 0 ? [NSString stringWithFormat:@"%.0fHz", g_mvPipeRate] : @"未知"];
         [s appendFormat:@"原始回调已捕获：%@\n", g_mvOrigCb ? @"是 ✅" : @"否（按住说话一次即可）"];
-        [s appendFormat:@"待发送装填：%@（%lu/%lu 字节）",
+        [s appendFormat:@"待发送装填：%@（%lu/%lu 字节）\n",
             g_mvArmed ? @"就绪，等待按住说话" : @"无",
             (unsigned long)g_mvOff, (unsigned long)g_mvFeed.length];
     }
+    [s appendFormat:@"日志文件：%@", MVLogFilePath() ?: @"(不可写)"];
     return s;
 }
 
