@@ -1,6 +1,6 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 2.0.6
+Version: 2.0.8
 Architecture: iphoneos-arm64
 Description: 微信文字转语音（克隆你的音色，阿里云百炼CosyVoice）；SILK直发修复8.0.76没声音；设置面板可填Key/OSS
 Maintainer: yzdmm2024

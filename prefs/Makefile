@@ -8,7 +8,11 @@ MyVoicePrefs_FILES := MyVoicePreferences.m
 # /Library/PreferenceLoader/Preferences（见下方 internal-stage）。
 MyVoicePrefs_INSTALL_PATH := /Library/PreferenceBundles
 MyVoicePrefs_FRAMEWORKS := Foundation UIKit
-MyVoicePrefs_PRIVATE_FRAMEWORKS := Preferences
+# 不链接 Preferences 框架：CI 用的 iOS SDK 里有 Preferences 头文件、但没有可链接的框架二进制
+# （ld: framework 'Preferences' not found）。preference bundle 跑在 Settings 进程里，
+# PSListController 由宿主在运行时提供，用 dynamic_lookup 让符号运行时解析即可。
+MyVoicePrefs_PRIVATE_FRAMEWORKS :=
+MyVoicePrefs_LDFLAGS := -Wl,-undefined,dynamic_lookup
 MyVoicePrefs_CFLAGS := -fobjc-arc -Wno-error
 # Resources/ 目录存在时 theos 会自动作为 bundle 资源目录（含 Info.plist / Root.plist）
 
