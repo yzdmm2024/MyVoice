@@ -10,12 +10,22 @@
 #import <objc/message.h>
 
 // ============================================================
-// 直发语音消息（修复 8.0.76 没声音）
-// 旧方案 hook AudioQueue 把 PCM 塞进微信录音回调 —— 微信新版录音链路不走 AudioQueue，
-// 因此合成音频进不去，气泡生成但无声。
-// 新方案（参考 TTSFloat_v29）：合成 PCM → SILK 编码 → 调微信内部
-//   sendVoiceToWeChat:toUsr:  直接构造语音消息发出。
-// 目标类/选择器可在设置 sendClass 里微调（不同微信版本类名可能不同），默认 CMessageMgr。
+// 直发语音（2.0.17 重做）
+//
+// 为什么重做：老方案想调 `sendVoiceToWeChat:toUsr:` / 用 `silk_Encode` 裸符号 —— frida 实测
+// 微信 8.0.75 **两者都不存在**，所以永远走到「编码失败」分支。
+//
+// 8.0.75 上实测可用的链路（本文件按此实现）：
+//   ① 编码：MJSilkCodec 实例方式
+//        - initWithEncoderWithSampleRate:24000   （编码实测：B24@0:8q16，参数是 long long）
+//        - encodeFromPCMData:                    （@24@0:8@16，返回 SILK 的 NSData）
+//      产物用 AudioUtil + calcSilkVoiceTime: 验证过：1s→1000 / 2s→2000 / 3s→3000 ms ✅
+//      ⚠️ 别用类方法 +encodeToSilkFromPCMData:：它产出的数据微信自己算时长恒为 20，是另一套分帧
+//   ② 消息体：CMessageWrap -initWithMsgType:34（34 = 语音）
+//      169 个 ivar 里**没有**任何语音时长字段 → 时长由音频文件现算；
+//      m_nsContent 放音频文件名，-getVoicePath 会算出微信期望的绝对路径
+//   ③ 发送：CMessageMgr -AddMsg:MsgWrap:（实测 v32@0:8@16@24 → 两个参数都是对象）
+//      第一个参数是微信自己传的常量对象，由 Tweak.x 里的 hook 抓下来复用（抓不到就传 nil）
 // ============================================================
 
 @implementation MyVoiceSender
@@ -57,86 +67,137 @@
 
     [engine synthesizeText:text voiceID:vid completion:^(NSData *pcm, NSError *err){
         // ⚠️ 这个 block 一定在后台线程执行（离线引擎=全局队列，云端引擎=NSURLSession 回调）。
-        //    SILK 编码是纯 CPU 活，留在后台；但凡碰到微信内部接口/UI 的部分，
-        //    必须 MVOnMain 回主线程 —— 否则微信 swizzle 过的 -addSubview: 会撞 AutoLayout 断言闪退。
+        //    SILK 编码是纯 CPU 活，留在后台；碰微信内部接口的部分必须回主线程 ——
+        //    否则微信 swizzle 过的 -addSubview: 会撞 AutoLayout 断言闪退（2.0.14 那次闪退）。
         if (!pcm || err) {
             MVLog(@"合成失败 %@，回退占位音", err);
             pcm = [MyVoiceEngine placeholderPCM:text];
         }
         if (!pcm) { MVLog(@"send 取消：无 PCM"); return; }
 
-        NSData *silk = [[MyVoiceSILK shared] encodePCM:pcm];
-        if (!silk) {
-            MVLog(@"[silk] 编码失败：本进程无 SILK 符号，无法直发");
-            [[MyVoiceManager shared] toast:@"SILK 编码失败（请用 frida 脚本确认微信 SILK 符号）"];
+        MyVoiceSILK *codec = [MyVoiceSILK shared];
+        NSData *silk = [codec encodePCM:pcm];
+        if (!silk.length) {
+            MVLog(@"[silk] 编码失败，无法直发");
+            MVOnMain(^{ [[MyVoiceManager shared] toast:@"SILK 编码失败（先用面板的「测试配置」看自检）"]; });
             return;
         }
-        MVOnMain(^{ [self directSend:silk toTalker:peer]; });
+        // 自检：能不能解回 PCM（能解说明确实是微信认的 SILK）
+        NSUInteger backLen = [codec pcmLengthFromSilk:silk];
+        MVLog(@"[silk] 编码 %lu B PCM → %lu B SILK，解码自检 %lu B",
+              (unsigned long)pcm.length, (unsigned long)silk.length, (unsigned long)backLen);
+
+        MVOnMain(^{
+            NSString *errMsg = nil;
+            BOOL ok = [self directSendSilk:silk toTalker:peer error:&errMsg];
+            if (ok) {
+                [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"已发语音 → %@", peer]];
+            } else {
+                [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"发送失败：%@", errMsg ?: @"未知"]];
+            }
+        });
     }];
 }
 
-#pragma mark - 解析微信发送目标
+#pragma mark - 音频文件落盘
 
-// 返回 (target 实例, selector)。优先用设置里的 sendClass；否则按候选类 + 候选选择器自省。
-- (BOOL)resolveSendTarget:(id*)outTarget selector:(SEL*)outSel {
-    NSArray<NSString*> *classCands = nil;
-    NSString *cfg = [MVPrefs() stringForKey:@"sendClass"];
-    if (cfg.length) classCands = @[cfg];
-    else classCands = @[@"CMessageMgr", @"MMMsgLogicManager", @"MessageLogicController",
-                        @"CMessageWrap", @"WCMsgLogicManager"];
+// 问微信「这个文件名对应的语音绝对路径是什么」（CMessageWrap -getVoicePath 由 m_nsContent 算出）。
+// 实测 169 个 ivar 里没有时长字段，说明音频文件本身就是权威 —— 所以必须放到微信认的位置。
+// 返回：写成功的绝对路径；通过 outRelative 返回应该写进 m_nsContent 的值。
+static NSString* MVWriteSilk(NSData *silk, NSString *fname, NSString **outContent) {
+    NSMutableArray<NSString*> *cands = [NSMutableArray array];
 
-    NSArray<NSString*> *selCands = [MyVoiceResolver sendVoiceCandidates];
-
-    for (NSString *cn in classCands) {
-        Class cls = NSClassFromString(cn);
-        if (!cls) continue;
-        // 先尝试 MMServiceCenter 取服务实例（CMessageMgr 等单例）
-        id target = [self serviceInstanceForClass:cls];
-        if (!target) {
-            @try { target = [[cls alloc] init]; } @catch (NSException *e) { target = nil; }
-        }
-        if (!target) continue;
-        for (NSString *sn in selCands) {
-            SEL s = NSSelectorFromString(sn);
-            if (s && [target respondsToSelector:s]) {
-                *outTarget = target; *outSel = s;
-                MVLog(@"[sender] 命中发送目标 %@ -%@", cn, sn);
-                return YES;
-            }
-        }
+    // ① 让微信自己算（最正确）
+    Class W = NSClassFromString(@"CMessageWrap");
+    if (W) {
+        @try {
+            id tmp = ((id(*)(id,SEL,long long))objc_msgSend)([W alloc],
+                       NSSelectorFromString(@"initWithMsgType:"), 34LL);
+            MVCall1(tmp, @"setM_nsContent:", fname);
+            id vp = MVCall0(tmp, @"getVoicePath");
+            if ([vp isKindOfClass:[NSString class]] && [vp length] && [vp hasPrefix:@"/"])
+                [cands addObject:vp];
+        } @catch (NSException *e) { MVLog(@"[send] getVoicePath 异常 %@", e.reason); }
     }
-    MVLog(@"[sender] 未找到可用的发送目标（类/选择器）。请用 frida 脚本确认微信版本对应的 sendVoiceToWeChat:toUsr: 所在类");
-    return NO;
-}
+    // ② 兜底：自己的沙箱
+    [cands addObject:[NSTemporaryDirectory() stringByAppendingPathComponent:fname]];
+    [cands addObject:[NSHomeDirectory() stringByAppendingPathComponent:fname]];
 
-- (id)serviceInstanceForClass:(Class)cls {
-    Class sc = NSClassFromString(@"MMServiceCenter");
-    if (!sc) return nil;
-    SEL dc = NSSelectorFromString(@"defaultCenter");
-    if (![sc respondsToSelector:dc]) return nil;
-    id center = ((id(*)(id,SEL))objc_msgSend)(sc, dc);
-    if (!center) return nil;
-    SEL gs = NSSelectorFromString(@"getService:");
-    if (![center respondsToSelector:gs]) return nil;
-    return ((id(*)(id,SEL,id))objc_msgSend)(center, gs, cls);
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *p in cands) {
+        NSString *dir = [p stringByDeletingLastPathComponent];
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        if ([silk writeToFile:p atomically:YES]) {
+            MVLog(@"[send] SILK 已写入 %@（%lu B）", p, (unsigned long)silk.length);
+            // 微信自己算出来的路径 → content 保持文件名；否则 content 直接给绝对路径
+            *outContent = [cands.firstObject isEqualToString:p] ? fname : p;
+            return p;
+        }
+        MVLog(@"[send] 写入失败（继续试下一个）：%@", p);
+    }
+    return nil;
 }
 
 #pragma mark - 直发
 
-- (void)directSend:(NSData*)silk toTalker:(NSString*)peer {
-    id target = nil; SEL sel = NULL;
-    if (![self resolveSendTarget:&target selector:&sel]) {
-        [[MyVoiceManager shared] toast:@"未找到微信语音发送接口（见 frida 脚本）"];
-        return;
-    }
+- (BOOL)directSendSilk:(NSData*)silk toTalker:(NSString*)peer error:(NSString**)errOut {
+    NSString *err = [self sendSilkInternal:silk toTalker:peer];
+    if (err) { if (errOut) *errOut = err; return NO; }
+    return YES;
+}
+
+// 返回 nil = 成功；否则返回失败原因
+- (NSString*)sendSilkInternal:(NSData*)silk toTalker:(NSString*)peer {
+    Class W = NSClassFromString(@"CMessageWrap");
+    if (!W) return @"微信版本不支持（CMessageWrap 缺失）";
+
+    id mgr = MVService(@"CMessageMgr");
+    if (!mgr) return @"取不到 CMessageMgr（微信可能还没登录完）";
+    SEL addSel = NSSelectorFromString(@"AddMsg:MsgWrap:");
+    if (![mgr respondsToSelector:addSel]) return @"微信没有 AddMsg:MsgWrap:";
+
+    NSString *selfUsr = [MyVoiceResolver selfWxid];
+    if (!selfUsr.length) return @"拿不到自己的 wxid";
+
+    // 1) 落盘（顺便问出正确的 m_nsContent）
+    NSString *fname = [NSString stringWithFormat:@"mv%ld.silk", (long)[[NSDate date] timeIntervalSince1970]];
+    NSString *content = fname;
+    NSString *path = MVWriteSilk(silk, fname, &content);
+    if (!path) return @"音频文件写不进去";
+
+    // 2) 构造语音消息体
+    id wrap = nil;
     @try {
-        ((void(*)(id,SEL,id,id))objc_msgSend)(target, sel, silk, peer);
-        MVLog(@"[sender] 已调用 sendVoiceToWeChat:toUsr: 直发 %lu bytes → %@", (unsigned long)silk.length, peer);
-        [[MyVoiceManager shared] toast:@"已发送语音（克隆音色）"];
+        wrap = ((id(*)(id,SEL,long long))objc_msgSend)([W alloc],
+                 NSSelectorFromString(@"initWithMsgType:"), 34LL);
     } @catch (NSException *e) {
-        MVLog(@"[sender] 直发异常 %@", e);
-        [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"直发异常：%@", e.reason]];
+        return [NSString stringWithFormat:@"构造消息体异常：%@", e.reason];
     }
+    if (!wrap) return @"构造语音消息体失败";
+
+    MVCall1(wrap, @"setM_nsFromUsr:", selfUsr);
+    MVCall1(wrap, @"setM_nsToUsr:", peer);
+    MVCall1(wrap, @"setM_nsContent:", content);
+    MVSetInt(wrap, @"setM_uiCreateTime:", (unsigned int)[[NSDate date] timeIntervalSince1970]);
+    MVSetInt(wrap, @"setM_uiMesLocalID:", 0);
+    MVSetInt(wrap, @"setM_uiStatus:", 1);
+
+    // 3) 时长自检（只打日志：时长由文件现算，不需要写进消息体）
+    NSInteger ms = [[MyVoiceSILK shared] durationMsForSilk:silk];
+    MVLog(@"[send] content=%@  path=%@  时长自检=%ldms  getVoicePath=%@",
+          content, path, (long)ms, MVCall0(wrap, @"getVoicePath"));
+
+    // 4) 发送。第一个参数用 hook 抓到的那个对象；没抓到就传 nil（微信内部拿它当上下文，nil 安全）
+    id arg0 = [MyVoiceResolver capturedAddMsgArg0];
+    MVLog(@"[send] AddMsg arg0 = %@（%@）", arg0,
+          arg0 ? NSStringFromClass(object_getClass(arg0)) : @"未捕获→传 nil");
+    @try {
+        MVCallVoid2(mgr, @"AddMsg:MsgWrap:", arg0, wrap);
+    } @catch (NSException *e) {
+        return [NSString stringWithFormat:@"AddMsg 异常：%@", e.reason];
+    }
+    MVLog(@"[send] ✅ AddMsg 调用完成 → %@", peer);
+    return nil;
 }
 
 @end

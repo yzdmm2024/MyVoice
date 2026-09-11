@@ -1,4 +1,6 @@
 #import <Foundation/Foundation.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 
 // 统一日志前缀，方便在设备 syslog 里过滤调试。
 #define MVLog(fmt, ...) NSLog(@"[MyVoice] " fmt, ##__VA_ARGS__)
@@ -167,4 +169,78 @@ static inline void MVOnMain(dispatch_block_t blk) {
     if (!blk) return;
     if ([NSThread isMainThread]) blk();
     else dispatch_async(dispatch_get_main_queue(), blk);
+}
+
+// ---- 微信内部服务/工具（2.0.17 直发链路用）----
+
+// 取微信服务实例（CMessageMgr / CContactMgr / ...）：
+// 首选 MMServiceCenter.defaultCenter → getService:<cls>，退化到 sharedInstance。
+static inline id MVService(NSString *clsName) {
+    Class cls = NSClassFromString(clsName);
+    if (!cls) return nil;
+    @try {
+        Class sc = NSClassFromString(@"MMServiceCenter");
+        if (sc) {
+            SEL dc = NSSelectorFromString(@"defaultCenter");
+            if ([sc respondsToSelector:dc]) {
+                id center = ((id(*)(id,SEL))objc_msgSend)(sc, dc);
+                SEL gs = NSSelectorFromString(@"getService:");
+                if (center && [center respondsToSelector:gs]) {
+                    id svc = ((id(*)(id,SEL,id))objc_msgSend)(center, gs, cls);
+                    if (svc) return svc;
+                }
+            }
+        }
+        SEL si = NSSelectorFromString(@"sharedInstance");
+        if ([cls respondsToSelector:si]) return ((id(*)(id,SEL))objc_msgSend)(cls, si);
+    } @catch (NSException *e) {
+        MVLog(@"[svc] 取 %@ 实例异常 %@", clsName, e.reason);
+    }
+    return nil;
+}
+
+// 无参数、有返回值的消息发送（避免到处写 objc_msgSend 强转）
+static inline id MVCall0(id obj, NSString *sel) {
+    SEL s = NSSelectorFromString(sel);
+    if (!obj || ![obj respondsToSelector:s]) return nil;
+    return ((id(*)(id,SEL))objc_msgSend)(obj, s);
+}
+static inline id MVCall1(id obj, NSString *sel, id a1) {
+    SEL s = NSSelectorFromString(sel);
+    if (!obj || ![obj respondsToSelector:s]) return nil;
+    return ((id(*)(id,SEL,id))objc_msgSend)(obj, s, a1);
+}
+static inline void MVCallVoid2(id obj, NSString *sel, id a1, id a2) {
+    SEL s = NSSelectorFromString(sel);
+    if (!obj || ![obj respondsToSelector:s]) return;
+    ((void(*)(id,SEL,id,id))objc_msgSend)(obj, s, a1, a2);
+}
+// 第一个参数是整型的那种（AddMsg:MsgWrap: 可能如此）
+static inline void MVCallVoidIntObj(id obj, NSString *sel, long long a1, id a2) {
+    SEL s = NSSelectorFromString(sel);
+    if (!obj || ![obj respondsToSelector:s]) return;
+    ((void(*)(id,SEL,long long,id))objc_msgSend)(obj, s, a1, a2);
+}
+// 给对象设一个整型字段（CMessageWrap 的 m_uiCreateTime / m_uiMesLocalID 等都是 I=unsigned int）
+static inline void MVSetInt(id obj, NSString *sel, unsigned int v) {
+    SEL s = NSSelectorFromString(sel);
+    if (!obj || ![obj respondsToSelector:s]) return;
+    ((void(*)(id,SEL,unsigned int))objc_msgSend)(obj, s, v);
+}
+// 取一个返回 uint 的方法（如 getVoiceFormat）
+static inline unsigned int MVGetUInt(id obj, NSString *sel) {
+    SEL s = NSSelectorFromString(sel);
+    if (!obj || ![obj respondsToSelector:s]) return 0;
+    return ((unsigned int(*)(id,SEL))objc_msgSend)(obj, s);
+}
+// 布尔方法（fileExistsAtPath: / writeToFile:atomically: 等）
+static inline BOOL MVGetBool1(id obj, NSString *sel, id a1) {
+    SEL s = NSSelectorFromString(sel);
+    if (!obj || ![obj respondsToSelector:s]) return NO;
+    return ((BOOL(*)(id,SEL,id))objc_msgSend)(obj, s, a1);
+}
+static inline BOOL MVGetBool2(id obj, NSString *sel, id a1, BOOL a2) {
+    SEL s = NSSelectorFromString(sel);
+    if (!obj || ![obj respondsToSelector:s]) return NO;
+    return ((BOOL(*)(id,SEL,id,BOOL))objc_msgSend)(obj, s, a1, a2);
 }

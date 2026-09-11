@@ -20,6 +20,12 @@
 // 当前聊天对象 wxid（多路径解析，见 .m 里的优先级注释）
 + (NSString*)currentTalker;
 + (UIViewController*)topViewController;
+// 自己的 wxid（构造语音消息的 m_nsFromUsr；带缓存 + 落共享配置）
++ (NSString*)selfWxid;
+// 微信自己发消息时 AddMsg:MsgWrap: 用的第一个参数（hook 捕获，直发复用；可能为 nil）
++ (id)capturedAddMsgArg0;
+// 供 hook 调用：抓下 AddMsg:MsgWrap: 的第一个参数
++ (void)captureAddMsgArg0:(id)arg0;
 // 取一个可用窗口（多 scene 兼容）。⚠️ 必须在主线程调用。
 + (UIWindow*)anyWindow;
 

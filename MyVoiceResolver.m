@@ -50,8 +50,11 @@
              @"onVoiceRecordStop:", @"finishRecording"];
 }
 + (NSArray<NSString*>*)sendVoiceCandidates {
-    return @[@"SendOriVoiceMsgWithUserData:", @"sendVoiceToWeChat:toUsr:",
-             @"sendVoice:toUsr:", @"sendVoiceMsg", @"sendVoiceData:toUsr:"];
+    // 微信 8.0.75 实测：老 tweak 用的 sendVoiceToWeChat:toUsr: **已不存在**。
+    // 现在真正可用的直发口是 CMessageMgr -AddMsg:MsgWrap:（见 MyVoiceSender 的 directSendSilk:）。
+    // 这里保留候选清单只是为了兼容老版本微信。
+    return @[@"AddMsg:MsgWrap:", @"SendOriVoiceMsgWithUserData:",
+             @"sendVoiceToWeChat:toUsr:", @"sendVoice:toUsr:"];
 }
 + (NSArray<NSString*>*)audioSenderCandidates {
     return @[@"AudioSender", @"VoiceSender", @"RecorderSender"];
@@ -363,6 +366,46 @@ static NSTimeInterval _mvCapturedAt = 0; // 捕获时间（30 分钟内有效）
     }
     return nil;
 }
+
+#pragma mark - 自己的 wxid / AddMsg 的 arg0（构造语音消息用）
+
+// 自己的 wxid：CContactMgr.getSelfContact → m_nsUsrName。带进程内缓存 + 落共享配置。
++ (NSString*)selfWxid {
+    static NSString *cached = nil;
+    if (cached.length) return cached;
+    // 先看落盘（微信进程重启后不用再问一遍）
+    NSString *disk = MVGetStr(@"selfWxid");
+    if (disk.length) { cached = disk; return cached; }
+
+    @try {
+        id cc = MVService(@"CContactMgr");
+        id me = MVCall0(cc, @"getSelfContact");
+        id u  = MVCall0(me, @"m_nsUsrName");
+        if ([u isKindOfClass:[NSString class]] && [u length]) {
+            cached = [u copy];
+            MVSetShared(@"selfWxid", cached);
+            MVLog(@"[resolver] 自己的 wxid = %@", cached);
+        }
+    } @catch (NSException *e) {
+        MVLog(@"[resolver] 取自己 wxid 异常 %@", e.reason);
+    }
+    return cached ?: @"";
+}
+
+// 微信自己发/收消息时会调 CMessageMgr -AddMsg:MsgWrap:，第一个参数是个**常量对象**
+// （实测两次调用同一地址）。直发时要原样复用，所以 hook 里抓下来存住。
+static id g_mvAddMsgArg0 = nil;
+
++ (void)captureAddMsgArg0:(id)arg0 {
+    if (!arg0 || g_mvAddMsgArg0) return;
+    @try {
+        CFRetain((__bridge CFTypeRef)arg0);      // hook 里拿到的往往是 autorelease 的，必须留一份
+        g_mvAddMsgArg0 = arg0;
+        MVLog(@"[resolver] 捕获 AddMsg arg0 = %@ [%@]", arg0, NSStringFromClass(object_getClass(arg0)));
+    } @catch (NSException *e) {}
+}
+
++ (id)capturedAddMsgArg0 { return g_mvAddMsgArg0; }
 
 #pragma mark - 调试信息（用户把日志贴回来即可精修 8.0.76 符号）
 
