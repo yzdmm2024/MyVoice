@@ -76,6 +76,8 @@ static OSStatus MV_AudioQueueNewInput(const AudioStreamBasicDescription *inForma
     return orig_AudioQueueNewInput(inFormat, MV_AQInputTrampoline, inUserData, inRunLoop, inMode, inFlags, outAQ);
 }
 
+@implementation MyVoiceSender
+
 #pragma mark - 会话身份捕获 / 持久化
 
 + (void)persistSessionFrom:(id)from to:(id)to info:(id)info {
