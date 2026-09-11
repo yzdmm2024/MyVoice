@@ -56,7 +56,7 @@
 
     NSArray *vs = [self voiceList];
     NSMutableArray *titles = [NSMutableArray array];
-    if (vs.count == 0) [titles addObject:@"(未克隆音色)"];
+    if (vs.count == 0) [titles addObject:@"(未创建音色)"];
     for (NSDictionary *d in vs) [titles addObject:d[@"name"] ?: @"音色"];
     self.voiceSeg = [[UISegmentedControl alloc] initWithItems:titles];
     self.voiceSeg.frame = CGRectMake(12, 122, 266, 30);
@@ -75,7 +75,7 @@
     [self.panel addSubview:send];
 
     UIButton *clone = [UIButton buttonWithType:UIButtonTypeSystem];
-    [clone setTitle:@"克隆音色" forState:UIControlStateNormal];
+    [clone setTitle:@"音色管理" forState:UIControlStateNormal];
     clone.frame = CGRectMake(150, 162, 128, 40); clone.layer.cornerRadius = 8;
     clone.backgroundColor = [UIColor tertiarySystemBackgroundColor];
     [clone addTarget:self action:@selector(onClone) forControlEvents:UIControlEventTouchUpInside];
@@ -104,7 +104,7 @@
     NSString *text = [self.textView.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (!text.length) { [[MyVoiceManager shared] toast:@"请先输入文字"]; return; }
     NSString *vid = [self selectedVoiceID];
-    if (MVEngineMode()==1 && !vid.length) { [[MyVoiceManager shared] toast:@"请先克隆一个音色"]; return; }
+    if (MVEngineMode()==1 && !vid.length) { [[MyVoiceManager shared] toast:@"请先创建一个音色"]; return; }
     [MVPrefs() setObject:vid forKey:@"currentVoiceID"]; [MVPrefs() synchronize];
     [[MyVoiceManager shared] handleSendText:text];
     self.panel.hidden = YES;

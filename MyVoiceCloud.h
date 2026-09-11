@@ -14,4 +14,11 @@
 - (void)cloneVoiceWithName:(NSString*)name
               referenceAudioPath:(NSString*)path
                       completion:(void(^)(NSString* voiceID, NSError* err))completion;
+
+// 声音设计：只给一句文字描述（如"沉稳的中年男性播音员"）→ 调 customization 的
+// voice_prompt 分支 → 回调 voice_id。不需要参考音频、不需要录音、不需要 OSS。
+- (void)designVoiceWithName:(NSString*)name
+                     prompt:(NSString*)prompt
+                previewText:(NSString*)previewText
+                 completion:(void(^)(NSString* voiceID, NSError* err))completion;
 @end

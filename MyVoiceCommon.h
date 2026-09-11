@@ -59,6 +59,10 @@ static inline NSDictionary* MVCurrentVoice(void) {
 static inline NSString* MVCurrentVoiceID(void) { return MVCurrentVoice()[@"voiceID"] ?: @""; }
 static inline NSString* MVCurrentModel(void)   { return MVCurrentVoice()[@"model"] ?: @"cosyvoice-v3.5-plus"; }
 
+// 声音设计（文字描述生成音色）固定用 v3.5-plus：只有 cosyvoice v3.x 系列支持该能力。
+// 注意：target_model 必须与后续合成用的模型一致，否则合成会失败 —— 所以存音色时要记下这个值。
+static inline NSString* MVDesignModel(void) { return @"cosyvoice-v3.5-plus"; }
+
 // OSS（克隆音色时一次性托管参考音频，拿公网 URL 给 DashScope）
 static inline NSString* MVOSSBucket(void)   { return MVGetStr(@"ossBucket"); }
 static inline NSString* MVOSSHost(void)     { return MVGetStr(@"ossHost"); }   // 形如 oss-cn-hangzhou.aliyuncs.com

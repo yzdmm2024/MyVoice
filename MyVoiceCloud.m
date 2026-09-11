@@ -227,4 +227,57 @@ static NSError* MVErr(NSString *msg) {
     }];
 }
 
+#pragma mark - 声音设计（文字描述 → 音色，无 OSS / 无录音）
+
+- (void)designVoiceWithName:(NSString*)name
+                     prompt:(NSString*)prompt
+                previewText:(NSString*)previewText
+                 completion:(void(^)(NSString*, NSError*))completion {
+    NSString *apiKey = MVAPIKey();
+    NSString *host = [self maasHost];
+    if (!apiKey.length) { completion(nil, MVErr(@"未配置 DashScope API Key（设置→我的语音）")); return; }
+    if (!prompt.length) { completion(nil, MVErr(@"音色描述为空")); return; }
+
+    NSString *model = MVDesignModel();
+    NSString *cu = [host stringByAppendingString:@"/services/audio/tts/customization"];
+    NSDictionary *body = @{
+        @"model": @"voice-enrollment",
+        @"input": @{
+            @"action": @"create_voice",
+            @"target_model": model,
+            @"voice_prompt": prompt,
+            @"preview_text": previewText.length ? previewText : @"你好，这是用我的新音色说的话。",
+            @"prefix": @"myvoice"
+        },
+        @"parameters": @{ @"sample_rate": @24000, @"response_format": @"wav" }
+    };
+    NSData *json = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:cu]];
+    req.HTTPMethod = @"POST";
+    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    [req setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+    req.HTTPBody = json;
+    req.timeoutInterval = 120;
+    MVLog(@"[cloud] 声音设计请求 model=%@ prompt=%@", model, prompt);
+
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *err){
+        if (err) { completion(nil, err); return; }
+        NSInteger code = [(NSHTTPURLResponse*)r statusCode];
+        if (code != 200) {
+            NSString *msg = [[NSString alloc] initWithData:d?:[NSData data] encoding:NSUTF8StringEncoding];
+            MVLog(@"[cloud] 声音设计 HTTP %ld %@", (long)code, msg);
+            completion(nil, MVErr([NSString stringWithFormat:@"生成失败 %ld：%@", (long)code, msg]));
+            return;
+        }
+        NSDictionary *j = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+        NSString *vid = nil;
+        if ([j[@"output"] isKindOfClass:[NSDictionary class]]) vid = j[@"output"][@"voice_id"];
+        if (!vid.length) vid = j[@"voice_id"];
+        if (!vid.length) { MVLog(@"[cloud] 声音设计未返回 voice_id %@", j); completion(nil, MVErr(@"未返回 voice_id")); return; }
+        MVLog(@"[cloud] 声音设计成功 voice_id=%@", vid);
+        completion(vid, nil);
+    }] resume];
+}
+
 @end
