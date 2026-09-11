@@ -1,0 +1,41 @@
+{
+  entries = (
+    {
+      cell = PSGroupCell;
+      label = "我的语音";
+      footerText = "纯功能文字转语音。离线合成，不联网、不上传任何内容。";
+    },
+    {
+      cell = PSSwitchCell;
+      label = "启用";
+      key = "enabled";
+      default = true;
+      PostNotification = "com.yzdmm2024.myvoice/settings";
+    },
+    {
+      cell = PSGroupCell;
+      label = "默认音色";
+    },
+    {
+      cell = PSEditTextCell;
+      label = "音色ID";
+      key = "voiceID";
+      default = "";
+      PostNotification = "com.yzdmm2024.myvoice/settings";
+    },
+    {
+      cell = PSSegmentCell;
+      label = "触发方式";
+      key = "trigger";
+      validValues = ( 0, 1 );
+      validTitles = ( "悬浮按钮", "长按录音键" );
+      default = 0;
+      PostNotification = "com.yzdmm2024.myvoice/settings";
+    },
+    {
+      cell = PSGroupCell;
+      footerText = "悬浮按钮：聊天页右下角出现语音球，点开输入文字合成发送。长按录音键：按住微信录音键时改用合成音频替代麦克风。";
+    }
+  );
+  title = "我的语音";
+}
