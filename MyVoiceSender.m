@@ -40,8 +40,14 @@
 
 - (id<MyVoiceEngine>)engineForMode {
     if (MVEngineMode() == 1) {
-        if (MVAPIKey().length && MVCurrentVoiceID().length) return [MyVoiceCloud shared];
-        MVLog(@"[sender] 云端模式但未配置 Key/音色，回退离线 AVSpeech");
+        BOOL hasKey = MVAPIKey().length > 0;
+        // 千问用预置音色，不要求先克隆；CosyVoice 才必须有 voiceID
+        BOOL hasVoice = (MVTTSProvider() == 1) || (MVCurrentVoiceID().length > 0);
+        if (hasKey && hasVoice) return [MyVoiceCloud shared];
+        MVLog(@"[sender] 云端模式但缺配置（Key=%@ 音色就绪=%@），回退离线 AVSpeech",
+              hasKey ? @"有" : @"无", hasVoice ? @"是" : @"否");
+        MVOnMain(^{ [[MyVoiceManager shared] toast:
+            @"⚠️ 云端配置不全（Key/音色），本次用系统语音。\n请到 设置→我的语音 检查。"]; });
     }
     return [[NSClassFromString(@"MyVoiceAVSEngine") alloc] init];
 }
@@ -70,11 +76,15 @@
     [engine synthesizeText:text voiceID:vid completion:^(NSData *pcm, NSError *err){
         // ⚠️ 这个 block 在后台线程（离线=全局队列，云端=NSURLSession 回调）。
         //    SILK 编码/重采样是纯 CPU 活，留在后台；碰 UIKit/微信内部接口的必须回主线程。
-        if (!pcm || err) {
-            MVLog(@"合成失败 %@，回退占位音", err);
-            pcm = [MyVoiceEngine placeholderPCM:text];
+        if (!pcm || err || !pcm.length) {
+            // 2.2.0：不再静默回退正弦占位音（用户会莫名其妙发出一段"嘟——"，还以为是模型问题）。
+            //        合成失败就直接终止并明确报错。
+            NSString *why = err.localizedDescription ?: @"返回音频为空";
+            MVLog(@"合成失败：%@（已取消发送，不再回退占位音）", why);
+            MVOnMain(^{ [[MyVoiceManager shared] toast:
+                [NSString stringWithFormat:@"❌ 合成失败，未装填：%@", why]]; });
+            return;
         }
-        if (!pcm.length) { MVLog(@"send 取消：无 PCM"); return; }
 
         // 装填进录音管线（内部按管线采样率自适应重采样）
         NSUInteger ms = [MyVoiceRecorder feedPCM:pcm srcRate:MV_WECHAT_SR];

@@ -82,6 +82,93 @@ static NSError* MVErr(NSString *msg) {
 #pragma mark - TTS（合成）
 
 - (void)synthesizeText:(NSString*)text voiceID:(NSString*)voiceID completion:(void(^)(NSData*,NSError*))completion {
+    if (MVTTSProvider() == 1) {
+        [self synthesizeQwenText:text voiceID:voiceID completion:completion];
+        return;
+    }
+    [self synthesizeCosyText:text voiceID:voiceID completion:completion];
+}
+
+// 千问 Qwen-TTS（预置音色，无需克隆）：
+//   POST /api/v1/services/aigc/multimodal-generation/generation
+//   body: { model, input: { text, voice, language_type } }
+//   非流式响应: output.audio.url（24h 有效 wav），部分版本会直接给 output.audio.data（Base64）。
+//   注意该端点只在公共 dashscope 域名上提供，MAAS 子业务空间域名不适用。
+- (void)synthesizeQwenText:(NSString*)text voiceID:(NSString*)voiceID completion:(void(^)(NSData*,NSError*))completion {
+    NSString *apiKey = MVAPIKey();
+    if (!apiKey.length) { completion(nil, MVErr(@"未配置 DashScope API Key（设置→我的语音）")); return; }
+    if (!text.length)   { completion(nil, MVErr(@"文字为空")); return; }
+    NSString *voice = voiceID.length ? voiceID : MVQwenVoice();
+    NSString *model = MVQwenModel();
+
+    NSString *url = @"https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+    NSDictionary *body = @{
+        @"model": model,
+        @"input": @{
+            @"text": text,
+            @"voice": voice,
+            @"language_type": @"Auto"
+        }
+    };
+    NSData *json = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
+    req.HTTPMethod = @"POST";
+    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    [req setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+    req.HTTPBody = json;
+    req.timeoutInterval = 60;
+
+    MVLog(@"[qwen] TTS 请求 model=%@ voice=%@ textLen=%lu", model, voice, (unsigned long)text.length);
+    NSURLSession *s = [NSURLSession sharedSession];
+    [[s dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e){
+        if (e) { MVLog(@"[qwen] TTS 网络错误 %@", e); completion(nil, e); return; }
+        NSInteger code = [(NSHTTPURLResponse*)r statusCode];
+        if (code != 200) {
+            NSString *msg = [[NSString alloc] initWithData:d?:[NSData data] encoding:NSUTF8StringEncoding];
+            MVLog(@"[qwen] TTS HTTP %ld body=%@", (long)code, msg);
+            completion(nil, MVErr([NSString stringWithFormat:@"千问 TTS 失败 HTTP %ld：%@", (long)code, msg]));
+            return;
+        }
+        NSError *je = nil;
+        NSDictionary *j = [NSJSONSerialization JSONObjectWithData:d options:0 error:&je];
+        NSDictionary *audio = nil;
+        if ([j[@"output"] isKindOfClass:[NSDictionary class]] &&
+            [j[@"output"][@"audio"] isKindOfClass:[NSDictionary class]]) audio = j[@"output"][@"audio"];
+
+        // 优先用内联 Base64（省一次下载），没有再走 URL
+        NSString *b64 = audio[@"data"];
+        NSData *wav = nil;
+        if ([b64 isKindOfClass:[NSString class]] && b64.length > 100) {
+            wav = [[NSData alloc] initWithBase64EncodedString:b64 options:0];
+        }
+        if (!wav.length) {
+            NSString *audioURL = audio[@"url"];
+            if (!audioURL.length) {
+                MVLog(@"[qwen] TTS 未返回音频：%@", j);
+                completion(nil, MVErr(@"千问 TTS 未返回音频 URL"));
+                return;
+            }
+            // 二次下载 wav
+            [[s dataTaskWithURL:[NSURL URLWithString:audioURL] completionHandler:^(NSData *wd, NSURLResponse *wr, NSError *we){
+                if (we || wd.length == 0) { MVLog(@"[qwen] 下载音频失败 %@", we); completion(nil, we ?: MVErr(@"下载音频为空")); return; }
+                [self finishQwenWav:wd completion:completion];
+            }] resume];
+            return;
+        }
+        [self finishQwenWav:wav completion:completion];
+    }] resume];
+}
+
+- (void)finishQwenWav:(NSData*)wav completion:(void(^)(NSData*,NSError*))completion {
+    NSData *pcm = [self pcmFromWavData:wav];
+    if (!pcm) { completion(nil, MVErr(@"音频解码失败（非 wav？）")); return; }
+    MVLog(@"[qwen] TTS 解码完成 %lu bytes PCM", (unsigned long)pcm.length);
+    completion(pcm, nil);
+}
+
+// CosyVoice（克隆/设计音色）
+- (void)synthesizeCosyText:(NSString*)text voiceID:(NSString*)voiceID completion:(void(^)(NSData*,NSError*))completion {
     NSString *apiKey = MVAPIKey();
     NSString *host = [self maasHost];
     NSString *model = MVCurrentModel();

@@ -189,8 +189,41 @@ static inline NSString* MVLastTalker(void) {
 
 static inline BOOL MVEnabled(void)    { id v = MVGet(@"enabled"); return v ? [v boolValue] : YES; }
 
-// 引擎模式：0 = 离线(AVSpeech 系统中文，机器人音)；1 = 云端克隆音色(CosyVoice，你的声音)
+// 引擎模式：0 = 离线(AVSpeech 系统中文，机器人音)；1 = 云端(CosyVoice 克隆 或 千问 Qwen-TTS)
 static inline NSInteger MVEngineMode(void){ id v = MVGet(@"engineMode"); return v ? [v integerValue] : 1; }
+
+// 云端 TTS 服务商：0 = CosyVoice（克隆/设计音色）；1 = 千问 Qwen-TTS（官方预置音色，无需克隆）
+// 注意：同一个 DashScope API Key 两边通用，切换时不用换 Key。
+static inline NSInteger MVTTSProvider(void){ id v = MVGet(@"ttsProvider"); return v ? [v integerValue] : 0; }
+
+// 千问 Qwen-TTS 模型名（qwen3-tts-flash 支持全部 48 个预置音色；老 qwen-tts 只支持前 4 个）
+static inline NSString* MVQwenModel(void) {
+    NSString *v = MVGetStr(@"qwenModel");
+    return v.length ? v : @"qwen3-tts-flash";
+}
+// 千问当前预置音色（voice 参数，如 Cherry；面板里点选后会写到这个键）
+static inline NSString* MVQwenVoice(void) {
+    NSString *v = MVGetStr(@"qwenVoice");
+    return v.length ? v : @"Cherry";
+}
+
+// 千问预置音色（精选常用项；完整 48 个见
+// https://help.aliyun.com/zh/model-studio/qwen-tts-voice-list ，
+// 面板选不到的可在 设置→我的语音→千问音色 里直接填英文 voice 名，如 Dylan）
+static inline NSArray* MVQwenVoiceList(void) {
+    return @[
+        @{@"name": @"芊悦(女·自然)",   @"voiceID": @"Cherry",   @"model": @"qwen3-tts-flash"},
+        @{@"name": @"苏瑶(女·温柔)",   @"voiceID": @"Serena",   @"model": @"qwen3-tts-flash"},
+        @{@"name": @"千雪(女·甜)",     @"voiceID": @"Chelsie",  @"model": @"qwen3-tts-flash"},
+        @{@"name": @"晨煦(男·阳光)",   @"voiceID": @"Ethan",    @"model": @"qwen3-tts-flash"},
+        @{@"name": @"凯(男·舒适)",     @"voiceID": @"Kai",      @"model": @"qwen3-tts-flash"},
+        @{@"name": @"阿闻(男·播音)",   @"voiceID": @"Neil",     @"model": @"qwen3-tts-flash"},
+        @{@"name": @"不吃鱼(男·随性)", @"voiceID": @"Nofish",   @"model": @"qwen3-tts-flash"},
+        @{@"name": @"阿珍(沪语女)",    @"voiceID": @"Jada",     @"model": @"qwen3-tts-flash"},
+        @{@"name": @"晓东(京腔男)",    @"voiceID": @"Dylan",    @"model": @"qwen3-tts-flash"},
+        @{@"name": @"晴儿(川语女)",    @"voiceID": @"Sunny",    @"model": @"qwen3-tts-flash"},
+    ];
+}
 
 // DashScope（北京地域）凭证
 static inline NSString* MVAPIKey(void)     { return MVGetStr(@"apiKey"); }

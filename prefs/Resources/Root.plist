@@ -33,7 +33,7 @@
 			<key>label</key>
 			<string>合成引擎</string>
 			<key>footerText</key>
-			<string>离线＝系统中文语音（机器人音，免费、不联网）；克隆音色＝用自定义音色（只需下方 API Key，并在微信里创建一次音色）。</string>
+			<string>离线＝系统中文语音（机器人音，免费、不联网）；云端＝联网合成。选「云端」后请在下面「云端服务」里二选一。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -50,10 +50,69 @@
 			<key>validTitles</key>
 			<array>
 				<string>离线</string>
-				<string>克隆音色</string>
+				<string>云端</string>
 			</array>
 			<key>default</key>
 			<integer>1</integer>
+			<key>PostNotification</key>
+			<string>com.yzdmm2024.myvoice/settings</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>云端服务（引擎选「云端」时生效）</string>
+			<key>footerText</key>
+			<string>CosyVoice＝克隆/设计你自己的音色（在微信悬浮球→音色管理里创建）。千问 Qwen-TTS＝官方预置音色，不用克隆、开箱即用，同一个 API Key 通用；音色在微信悬浮球面板里选，更多音色可在下方「千问音色」直接填英文 voice 名。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSegmentCell</string>
+			<key>label</key>
+			<string>云端服务</string>
+			<key>key</key>
+			<string>ttsProvider</string>
+			<key>validValues</key>
+			<array>
+				<integer>0</integer>
+				<integer>1</integer>
+			</array>
+			<key>validTitles</key>
+			<array>
+				<string>CosyVoice 克隆</string>
+				<string>千问 Qwen-TTS</string>
+			</array>
+			<key>default</key>
+			<integer>0</integer>
+			<key>PostNotification</key>
+			<string>com.yzdmm2024.myvoice/settings</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>label</key>
+			<string>千问音色</string>
+			<key>key</key>
+			<string>qwenVoice</string>
+			<key>default</key>
+			<string>Cherry</string>
+			<key>placeholder</key>
+			<string>如 Cherry / Ethan / Dylan</string>
+			<key>PostNotification</key>
+			<string>com.yzdmm2024.myvoice/settings</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>label</key>
+			<string>千问模型</string>
+			<key>key</key>
+			<string>qwenModel</string>
+			<key>default</key>
+			<string>qwen3-tts-flash</string>
+			<key>placeholder</key>
+			<string>qwen3-tts-flash</string>
 			<key>PostNotification</key>
 			<string>com.yzdmm2024.myvoice/settings</string>
 		</dict>

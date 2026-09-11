@@ -45,7 +45,9 @@ static void MVSettingsChanged(CFNotificationCenterRef center, void *observer,
     MVLog(@"发送请求：talker=%@ text=%@", talker, text);
     // 2.1.0：不再直接发 —— 先把合成好的音频装填进录音管线，
     // 用户回到聊天页按住说话时才会真正发出去（见 MyVoiceSender 的说明）。
-    [[MyVoiceSender shared] sendText:text toTalker:talker voiceID:MVCurrentVoiceID()];
+    // 音色按服务商取：千问用预置音色（qwenVoice），CosyVoice 用克隆音色（currentVoiceID）。
+    NSString *vid = (MVTTSProvider() == 1) ? MVQwenVoice() : MVCurrentVoiceID();
+    [[MyVoiceSender shared] sendText:text toTalker:talker voiceID:vid];
 }
 
 // 面板顶部显示的一行状态：一眼看出「现在会发给谁」

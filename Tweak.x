@@ -50,7 +50,7 @@
 
 %ctor {
     @autoreleasepool {
-        MVLog(@"载入 我的语音 v2.1.0（录音管线劫持：TTS 音频直接喂进微信录音链，杜绝空白语音）");
+        MVLog(@"载入 我的语音 v2.2.0（云端：CosyVoice / 千问 Qwen-TTS 可选；录音队列按队列精确绑定）");
         MVLog(@"日志文件：%@", MVLogFilePath() ?: @"(不可写，只能用 syslog)");
         [[MyVoiceManager shared] setup];
 

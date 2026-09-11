@@ -24,7 +24,9 @@
 #define MV_PANEL_H 348.0
 
 - (NSArray<NSDictionary*>*)voiceList {
-    return MVVoices();  // 克隆音色列表（云端模式）
+    // 千问模式：官方预置音色，无需克隆；CosyVoice 模式：用户克隆/设计的音色
+    if (MVTTSProvider() == 1) return MVQwenVoiceList();
+    return MVVoices();
 }
 
 - (void)show {
@@ -91,12 +93,12 @@
 
     NSArray *vs = [self voiceList];
     NSMutableArray *titles = [NSMutableArray array];
-    if (vs.count == 0) [titles addObject:@"(未创建音色)"];
+    if (vs.count == 0) [titles addObject:(MVTTSProvider() == 1) ? @"(无音色)" : @"(未创建音色)"];
     for (NSDictionary *d in vs) [titles addObject:d[@"name"] ?: @"音色"];
     self.voiceSeg = [[UISegmentedControl alloc] initWithItems:titles];
     self.voiceSeg.frame = CGRectMake(12, 124, MV_PANEL_W - 24, 30);
     // 默认选中当前音色
-    NSString *cur = MVCurrentVoiceID();
+    NSString *cur = (MVTTSProvider() == 1) ? MVQwenVoice() : MVCurrentVoiceID();
     NSInteger sel = 0;
     for (NSInteger i=0;i<(int)vs.count;i++) if ([vs[i][@"voiceID"] isEqualToString:cur]) sel = i;
     self.voiceSeg.selectedSegmentIndex = (vs.count? sel : -1);
@@ -198,16 +200,25 @@
 - (NSString*)selectedVoiceID {
     NSInteger idx = self.voiceSeg.selectedSegmentIndex;
     NSArray *vs = [self voiceList];
-    if (idx >= 0 && idx < (int)vs.count) return vs[idx][@"voiceID"] ?: @"";
-    return MVCurrentVoiceID();
+    if (idx >= 0 && idx < (int)vs.count) {
+        NSString *vid = vs[idx][@"voiceID"] ?: @"";
+        if (MVTTSProvider() == 1) {           // 千问：记住选中的预置音色
+            [MVPrefs() setObject:vid forKey:@"qwenVoice"];
+            [MVPrefs() synchronize];
+        }
+        return vid;
+    }
+    return (MVTTSProvider() == 1) ? MVQwenVoice() : MVCurrentVoiceID();
 }
 
 - (void)onSend {
     NSString *text = [self.textView.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (!text.length) { [[MyVoiceManager shared] toast:@"请先输入文字"]; return; }
     NSString *vid = [self selectedVoiceID];
-    if (MVEngineMode()==1 && !vid.length) { [[MyVoiceManager shared] toast:@"请先创建一个音色"]; return; }
-    [MVPrefs() setObject:vid forKey:@"currentVoiceID"]; [MVPrefs() synchronize];
+    if (MVEngineMode()==1 && MVTTSProvider()==0 && !vid.length) { [[MyVoiceManager shared] toast:@"请先创建一个音色"]; return; }
+    if (MVTTSProvider()==0) {
+        [MVPrefs() setObject:vid forKey:@"currentVoiceID"]; [MVPrefs() synchronize];
+    }
     [[MyVoiceManager shared] handleSendText:text];
     self.panel.hidden = YES;
     [self stopSessionTimer];
