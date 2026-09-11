@@ -4,6 +4,7 @@
 #import "MyVoiceEngine.h"
 #import <substrate.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <dlfcn.h>
 #import <UIKit/UIKit.h>
 
 // 原 C 函数指针

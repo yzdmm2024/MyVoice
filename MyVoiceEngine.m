@@ -43,7 +43,7 @@
         AVSpeechSynthesisVoice *v = [AVSpeechSynthesisVoice voiceWithIdentifier:voiceID];
         if (v) u.voice = v;
     } else {
-        u.voice = [AVSpeechSynthesisVoice voiceForLanguage:@"zh-CN"];
+        u.voice = [AVSpeechSynthesisVoice voiceWithLanguage:@"zh-CN"];
     }
     u.rate = AVSpeechUtteranceDefaultSpeechRate;
     u.preUtteranceDelay = 0.1;
