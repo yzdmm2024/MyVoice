@@ -29,7 +29,6 @@
     if (!MVEnabled()) { MVLog(@"未启用"); return; }
     // 聊天对象优先级：① VC 自动识别 → ② 捕获/持久化的会话
     NSString *talker = [MyVoiceResolver currentTalker];
-    if (!talker.length) talker = [MyVoiceSender capturedToUsr];
     if (!talker.length) {
         MVLog(@"未识别到聊天对象");
         MVLog(@"%@", [MyVoiceResolver debugChatInfo]);
