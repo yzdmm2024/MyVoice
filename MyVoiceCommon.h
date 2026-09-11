@@ -88,6 +88,36 @@ static inline NSString* MVReadDiag(void) {
     return s;
 }
 
+// 写入共享域：容器 suite + jbroot plist 两处都写（微信侧读哪条都能拿到）
+static inline void MVSetShared(NSString *key, id value) {
+    if (!key.length) return;
+    [MVPrefs() setObject:value forKey:key];
+    [MVPrefs() synchronize];
+    NSString *p = [MV_JBROOT_PREFS stringByAppendingFormat:@"%@.plist", MV_PREFS_ID];
+    NSMutableDictionary *d = [NSMutableDictionary dictionaryWithContentsOfFile:p];
+    if (!d) d = [NSMutableDictionary dictionary];
+    d[key] = value;
+    [d writeToFile:p atomically:YES];   // 沙箱可能拒绝写 jbroot，失败无所谓（上面已写容器）
+}
+
+// 上次捕获到的会话（微信 8.0.75 上 VC 里没有 talker 字段，只能靠 hook 抓 + 记住）
+// 存「值 + 时间戳」，超过 30 分钟视为过期，避免把消息发给很久以前打开过的会话。
+static inline void MVSetLastTalker(NSString *talker) {
+    if (!talker.length) return;
+    MVSetShared(@"lastTalker", talker);
+    MVSetShared(@"lastTalkerAt", @([[NSDate date] timeIntervalSince1970]));
+}
+static inline NSString* MVLastTalker(void) {
+    NSString *t = MVGetStr(@"lastTalker");
+    if (!t.length) return nil;
+    id at = MVGet(@"lastTalkerAt");
+    if (at) {
+        NSTimeInterval ts = [at doubleValue];
+        if (ts > 0 && [[NSDate date] timeIntervalSince1970] - ts > 1800) return nil;
+    }
+    return t;
+}
+
 static inline BOOL MVEnabled(void)    { id v = MVGet(@"enabled"); return v ? [v boolValue] : YES; }
 
 // 引擎模式：0 = 离线(AVSpeech 系统中文，机器人音)；1 = 云端克隆音色(CosyVoice，你的声音)

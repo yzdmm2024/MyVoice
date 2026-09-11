@@ -35,17 +35,26 @@ static void MVSettingsChanged(CFNotificationCenterRef center, void *observer,
 
 - (void)handleSendText:(NSString*)text {
     if (!MVEnabled()) { MVLog(@"未启用"); return; }
-    // 聊天对象优先级：① VC 自动识别 → ② 捕获/持久化的会话
+    // 聊天对象：currentTalker 内部已经把「聊天页实时解析 → hook 捕获 → 落盘」串起来了
     NSString *talker = [MyVoiceResolver currentTalker];
     if (!talker.length) {
-        MVLog(@"未识别到聊天对象");
-        MVLog(@"%@", [MyVoiceResolver debugChatInfo]);
-        [self toast:@"未识别到聊天对象：请先在微信聊天里按住说话一次（捕获会话）"];
+        MVLog(@"未识别到聊天对象\n%@", [MyVoiceResolver talkerDiag]);
+        [self toast:@"未识别到聊天对象。\n请打开目标聊天窗口（或在该窗口按住说话一次），\n再返回本面板发送。"];
         return;
     }
     MVLog(@"发送请求：talker=%@ text=%@", talker, text);
     [self toast:[NSString stringWithFormat:@"正在合成并发送给 %@", talker]];
     [[MyVoiceSender shared] sendText:text toTalker:talker voiceID:MVCurrentVoiceID()];
+}
+
+// 面板顶部显示的一行状态：一眼看出「现在会发给谁」
+- (NSString*)talkerStatus {
+    NSString *t = [MyVoiceResolver currentTalker];
+    if (t.length) {
+        NSString *short_ = t.length > 18 ? [NSString stringWithFormat:@"…%@", [t substringFromIndex:t.length - 16]] : t;
+        return [NSString stringWithFormat:@"会话: %@", short_];
+    }
+    return @"会话: 未识别（打开聊天窗口）";
 }
 
 - (void)toast:(NSString*)msg {

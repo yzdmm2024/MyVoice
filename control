@@ -1,8 +1,8 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 2.0.13
+Version: 2.0.14
 Architecture: iphoneos-arm64
-Description: 微信文字转语音（阿里云百炼 CosyVoice）。修复「设置里能用、微信里读不到」：改为直接读 rootless 共享配置 /var/jb/var/mobile/Library/Preferences/；「测试配置」现在会显示读取来源。悬浮面板支持全屏拖动 + 右下角关闭。文字设计免 OSS 免录音。
+Description: 微信文字转语音（阿里云百炼 CosyVoice）。修复「一直提示未识别到聊天对象」：微信 8.0.75 的聊天页 VC 里根本没有 talker 字段，改为走真实的 -getChatUserName / -GetContact / m_contact / 逻辑控制器 m_contact 四条路，并在聊天页出现、录音结束时自动捕获会话写入共享配置；面板顶部新增「当前会话」状态行，可点按重新识别。
 Maintainer: yzdmm2024
 Author: yzdmm2024
 Section: Tweaks

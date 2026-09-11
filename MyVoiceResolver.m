@@ -1,4 +1,5 @@
 #import "MyVoiceResolver.h"
+#import "MyVoiceCommon.h"
 
 @implementation MyVoiceResolver
 
@@ -93,7 +94,181 @@
     return roots.firstObject;
 }
 
-#pragma mark - 聊天对象识别（版本自适应，运行时自省）
+#pragma mark - 聊天对象识别（微信 8.0.75 实测路径，见下方注释）
+
+// ============================================================
+// 为什么原来是坏的（frida 注入 WeChat 8.0.75.33 实测）：
+//   · BaseMsgContentViewController 的 316 个 ivar / 全部父类 ivar 里
+//     **完全没有 talker / user / session 字段**，所以老代码「扫 VC 字段找 wxid」
+//     必然一无所获 → 一直弹「未识别到聊天对象」，按多少次说话都没用。
+//   · 真正的会话在另一个对象上：BaseMsgContentLogicController.m_contact (@"CBaseContact")，
+//     且 VC 自己就暴露了 -getChatUserName / -GetContact / -GetCContact。
+// 解析优先级：
+//   ① VC -getChatUserName                （最直接，返回会话 wxid）
+//   ② VC -GetContact / -GetCContact       → CContact.m_nsUsrName
+//   ③ VC.m_contact                        → CContact.m_nsUsrName
+//   ④ VC.m_delegate（=LogicController）.m_contact / -getCurrentContact
+//   ⑤ 当前会话窗口里的消息 CMessageWrap（m_nsFromUsr = xx@chatroom 时可用）
+//   ⑥ 老套路：扫 VC 字段（仅少数老版本有效）
+//   ⑦ 本进程/落盘记住的上次捕获值（hook 聊天页出现时写入）
+// ============================================================
+
+static NSString *_mvCaptured = nil;      // 进程内缓存
+static NSTimeInterval _mvCapturedAt = 0; // 捕获时间（30 分钟内有效）
+
+// 只认微信内部标识。放宽会把「昵称」当会话 id 发出去 → 发错人，宁可识别不出来。
++ (NSString*)sanitize:(NSString*)s {
+    if (![s isKindOfClass:[NSString class]]) return nil;
+    NSString *t = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (t.length < 3) return nil;
+    if ([t hasPrefix:@"wxid_"]) return t;
+    if ([t hasPrefix:@"gh_"]) return t;
+    if ([t rangeOfString:@"@chatroom"].location != NSNotFound) return t;
+    if ([t rangeOfString:@"@openim"].location != NSNotFound) return t;
+    if ([t rangeOfString:@"@im.chat"].location != NSNotFound) return t;
+    return nil;
+}
+
+// 安全调用一个「返回对象」的无参方法（返回非对象时会被截断，这里只用于字符串 getter）
++ (id)call:(id)obj name:(NSString*)n {
+    if (!obj) return nil;
+    SEL sel = NSSelectorFromString(n);
+    if (!sel || ![obj respondsToSelector:sel]) return nil;
+    @try {
+        IMP imp = [obj methodForSelector:sel];
+        if (!imp) return nil;
+        return ((id (*)(id, SEL))imp)(obj, sel);
+    } @catch (NSException *e) { return nil; }
+}
+
+// 从联系人对象（CContact / CBaseContact / 字符串）里取 wxid
++ (NSString*)talkerFromContact:(id)c {
+    if (!c) return nil;
+    if ([c isKindOfClass:[NSString class]]) return [self sanitize:c];
+    for (NSString *k in @[@"m_nsUsrName", @"m_nsUserName", @"nsUsrName", @"m_nsEncryptUserName", @"userName"]) {
+        NSString *t = [self sanitize:[self valueForIvars:c names:@[k]]];
+        if (t) return t;
+    }
+    return nil;
+}
+
+// 从一条消息里取会话 id。只信「群」：from 就是群 id。1:1 时 from/to 哪个是自己分不清，
+// 胡猜会发错人，所以直接放弃，交给前面的路径。
++ (NSString*)talkerFromMsgWrap:(id)w {
+    if (!w) return nil;
+    NSString *from = [self sanitize:[self valueForIvars:w names:@[@"m_nsFromUsr", @"m_nsToUsr"]]];
+    if (from && [from rangeOfString:@"@chatroom"].location != NSNotFound) return from;
+    return nil;
+}
+
+// 判定「这个 VC 是不是聊天页」
++ (BOOL)isChatVC:(id)vc {
+    if (!vc) return NO;
+    NSString *cn = NSStringFromClass(object_getClass(vc));
+    return [cn rangeOfString:@"MsgContent"].location != NSNotFound;
+}
+
++ (NSString*)talkerFromChatVC:(id)vc {
+    if (![self isChatVC:vc]) return nil;
+
+    // ① 直接问它（8.0.75 上 BaseMsgContentViewController / LogicController 都有）
+    NSString *t = [self sanitize:[self call:vc name:@"getChatUserName"]];
+    if (t) return t;
+
+    // ② GetContact / GetCContact → m_nsUsrName
+    for (NSString *m in @[@"GetContact", @"GetCContact", @"getCurrentContact"]) {
+        t = [self talkerFromContact:[self call:vc name:m]];
+        if (t) return t;
+    }
+
+    // ③ 自己的 m_contact
+    t = [self talkerFromContact:[self valueForIvars:vc names:@[@"m_contact", @"m_oContact", @"contact"]]];
+    if (t) return t;
+
+    // ④ 逻辑控制器（VC.m_delegate 就是它，实测持有 m_contact）
+    id dg = [self valueForIvars:vc names:@[@"m_delegate", @"m_logicController", @"m_oLogicController", @"logicController"]];
+    if (dg) {
+        t = [self talkerFromContact:[self valueForIvars:dg names:@[@"m_contact"]]];
+        if (!t) t = [self talkerFromContact:[self call:dg name:@"getCurrentContact"]];
+        if (!t) t = [self sanitize:[self call:dg name:@"getChatUserName"]];
+        if (t) return t;
+    }
+
+    // ⑤ 当前会话窗口里的消息（只对群有效）
+    for (NSString *f in @[@"m_lastMsgInNewArray", @"m_firstUnReadMsg", @"m_scrollTargetMsg",
+                          @"_locateMsg", @"m_currentSpeakTextMsg", @"m_referOwnerMsg"]) {
+        t = [self talkerFromMsgWrap:[self valueForIvars:vc names:@[f]]];
+        if (t) return t;
+    }
+
+    // ⑥ 老套路兜底（仅老版本或特殊页面有效）
+    t = [self scanTalkerInObject:vc depth:0];
+    if (t) return t;
+    return [self looseScan:vc];
+}
+
++ (NSArray<UIViewController*>*)allViewControllers {
+    NSMutableArray *out = [NSMutableArray array];
+    NSMutableArray *stack = [NSMutableArray arrayWithArray:[self allRootViewControllers]];
+    int guard = 0;
+    while (stack.count && guard++ < 400) {
+        UIViewController *vc = stack.lastObject; [stack removeLastObject];
+        [out addObject:vc];
+        for (UIViewController *c in vc.childViewControllers) [stack addObject:c];
+        if (vc.presentedViewController) [stack addObject:vc.presentedViewController];
+    }
+    return out;
+}
+
++ (void)captureFromChatVC:(id)vc {
+    NSString *t = [self talkerFromChatVC:vc];
+    if (!t.length) return;
+    if ([t isEqualToString:_mvCaptured]) return;   // 没变就不折腾落盘
+    _mvCaptured = t;
+    _mvCapturedAt = [[NSDate date] timeIntervalSince1970];
+    MVSetLastTalker(t);
+    MVLog(@"[talker] 已捕获会话 %@（写入共享配置）", t);
+}
+
++ (NSString*)capturedTalker {
+    if (_mvCaptured.length && [[NSDate date] timeIntervalSince1970] - _mvCapturedAt < 1800)
+        return _mvCaptured;
+    return MVLastTalker();
+}
+
++ (NSString*)currentTalker {
+    // ① 活着的聊天页（最准）
+    for (UIViewController *vc in [self allViewControllers]) {
+        NSString *t = [self talkerFromChatVC:vc];
+        if (t) return t;
+    }
+    // ② 之前 hook 捕获 / 落盘记住的
+    return [self capturedTalker];
+}
+
++ (NSString*)talkerDiag {
+    NSMutableString *s = [NSMutableString string];
+    NSUInteger nChat = 0;
+    for (UIViewController *vc in [self allViewControllers]) {
+        if (![self isChatVC:vc]) continue;
+        nChat++;
+        NSString *cn = NSStringFromClass(object_getClass(vc));
+        [s appendFormat:@"聊天页 %@\n", cn];
+        [s appendFormat:@"  -getChatUserName = %@\n", [self sanitize:[self call:vc name:@"getChatUserName"]] ?: @"(无/空)"];
+        id ct = [self call:vc name:@"GetContact"];
+        [s appendFormat:@"  -GetContact = %@\n", ct ? NSStringFromClass(object_getClass(ct)) : @"(无)"];
+        [s appendFormat:@"  .m_contact = %@\n", [self valueForIvars:vc names:@[@"m_contact"]] ? NSStringFromClass(object_getClass([self valueForIvars:vc names:@[@"m_contact"]])) : @"(无)"];
+        id dg = [self valueForIvars:vc names:@[@"m_delegate"]];
+        [s appendFormat:@"  .m_delegate = %@\n", dg ? NSStringFromClass(object_getClass(dg)) : @"(无)"];
+        if (dg) [s appendFormat:@"    .m_contact.m_nsUsrName = %@\n",
+                 [self valueForIvars:[self valueForIvars:dg names:@[@"m_contact"]] names:@[@"m_nsUsrName"]] ?: @"(无)"];
+    }
+    if (!nChat) [s appendString:@"当前没有打开的聊天页\n"];
+    [s appendFormat:@"最终识别 = %@\n", [self currentTalker] ?: @"(失败)"];
+    return s;
+}
+
+#pragma mark - 调试信息（用户把日志贴回来即可精修微信符号）
 
 + (BOOL)looksLikeWxid:(NSString*)s {
     if (![s isKindOfClass:[NSString class]] || s.length < 3) return NO;
@@ -154,29 +329,6 @@
     return nil;
 }
 
-+ (NSString*)currentTalker {
-    NSArray *roots = [self allRootViewControllers];
-    // 第一遍：优先扫类名像聊天的 VC（精准）
-    NSMutableArray *stack = [NSMutableArray arrayWithArray:roots];
-    while (stack.count) {
-        UIViewController *vc = stack.lastObject; [stack removeLastObject];
-        NSString *t = [self scanTalkerInObject:vc depth:0];
-        if (t) return t;
-        for (UIViewController *c in vc.childViewControllers) [stack addObject:c];
-        if (vc.presentedViewController) [stack addObject:vc.presentedViewController];
-    }
-    // 第二遍：所有 VC 全量兜底（宽松匹配任意像 wxid 的字符串属性）
-    stack = [NSMutableArray arrayWithArray:roots];
-    while (stack.count) {
-        UIViewController *vc = stack.lastObject; [stack removeLastObject];
-        NSString *t = [self looseScan:vc];
-        if (t) return t;
-        for (UIViewController *c in vc.childViewControllers) [stack addObject:c];
-        if (vc.presentedViewController) [stack addObject:vc.presentedViewController];
-    }
-    return nil;
-}
-
 // 宽松：扫所有字符串属性，找像 wxid 的（跳过 UI/NS 系统对象）
 + (NSString*)looseScan:(id)obj {
     if (!obj) return nil;
@@ -221,6 +373,7 @@
     }
     NSString *t = [self currentTalker];
     [sb appendFormat:@"DETECTED TALKER = %@\n", t ?: @"(none)"];
+    [sb appendFormat:@"---- 路径自检 ----\n%@", [self talkerDiag]];
     return sb;
 }
 

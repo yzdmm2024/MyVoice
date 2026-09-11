@@ -12,6 +12,8 @@
 @property (nonatomic, strong) UISegmentedControl *voiceSeg;
 @property (nonatomic, strong) UIView *dragBar;
 @property (nonatomic, strong) UIButton *closeBtn;
+@property (nonatomic, strong) UILabel *sessionLabel;
+@property (nonatomic, strong) NSTimer *sessionTimer;
 @end
 
 @implementation MyVoicePanel
@@ -43,6 +45,7 @@
 }
 
 - (void)hide {
+    [self stopSessionTimer];
     [self.fab removeFromSuperview]; self.fab = nil;
     [self.panel removeFromSuperview]; self.panel = nil;
 }
@@ -122,6 +125,18 @@
     hint.textColor = [UIColor tertiaryLabelColor];
     [self.panel addSubview:hint];
 
+    // ---- 当前会话（点一下重新识别）----
+    self.sessionLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 272, MV_PANEL_W - 24, 20)];
+    self.sessionLabel.font = [UIFont systemFontOfSize:11];
+    self.sessionLabel.numberOfLines = 1;
+    self.sessionLabel.adjustsFontSizeToFitWidth = YES;
+    self.sessionLabel.minimumScaleFactor = 0.7;
+    self.sessionLabel.userInteractionEnabled = YES;
+    [self.sessionLabel addGestureRecognizer:[[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(refreshSession)]];
+    [self.panel addSubview:self.sessionLabel];
+    [self refreshSession];
+
     // ---- 右下角关闭按钮 ----
     self.closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.closeBtn setTitle:@"关闭" forState:UIControlStateNormal];
@@ -135,7 +150,25 @@
     [w addSubview:self.panel];
 }
 
-- (void)closePanel { self.panel.hidden = YES; }
+- (void)closePanel { self.panel.hidden = YES; [self stopSessionTimer]; }
+
+#pragma mark - 会话状态（面板可见时每秒刷新，最容易发现"识别不到"）
+
+- (void)refreshSession {
+    NSString *s = [[MyVoiceManager shared] talkerStatus];
+    BOOL ok = [s rangeOfString:@"未识别"].location == NSNotFound;
+    self.sessionLabel.text = [NSString stringWithFormat:@"%@  %@", s, ok ? @"✅" : @"（点我重试）"];
+    self.sessionLabel.textColor = ok ? [UIColor systemBlueColor] : [UIColor systemOrangeColor];
+}
+
+- (void)startSessionTimer {
+    if (self.sessionTimer) return;
+    self.sessionTimer = [NSTimer scheduledTimerWithTimeInterval:1.5 target:self
+        selector:@selector(refreshSession) userInfo:nil repeats:YES];
+}
+- (void)stopSessionTimer {
+    [self.sessionTimer invalidate]; self.sessionTimer = nil;
+}
 
 // 面板拖动：限制在屏幕内（顶部留 24pt，避免被状态栏/刘海挡住）
 - (void)dragPanel:(UIPanGestureRecognizer*)g {
@@ -152,7 +185,11 @@
     [g setTranslation:CGPointZero inView:host];
 }
 
-- (void)togglePanel { self.panel.hidden = !self.panel.hidden; }
+- (void)togglePanel {
+    self.panel.hidden = !self.panel.hidden;
+    if (self.panel.hidden) [self stopSessionTimer];
+    else { [self refreshSession]; [self startSessionTimer]; }
+}
 
 - (NSString*)selectedVoiceID {
     NSInteger idx = self.voiceSeg.selectedSegmentIndex;
@@ -169,6 +206,7 @@
     [MVPrefs() setObject:vid forKey:@"currentVoiceID"]; [MVPrefs() synchronize];
     [[MyVoiceManager shared] handleSendText:text];
     self.panel.hidden = YES;
+    [self stopSessionTimer];
 }
 
 - (void)onPreview {
