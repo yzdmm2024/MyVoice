@@ -7,6 +7,7 @@
 #import "MyVoiceManager.h"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 // ============================================================
 // 直发语音消息（修复 8.0.76 没声音）
