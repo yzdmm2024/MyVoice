@@ -20,8 +20,10 @@ static NSError* MVErr(NSString *msg) {
 #pragma mark - 端点
 
 - (NSString*)maasHost {
+    // 留空 = 默认业务空间：走公开 DashScope 域名，只需 API Key，无需 Workspace ID。
+    // 只有当用户填了「子业务空间」的 ID 时，才切到 MAAS 专属子域。
     NSString *ws = MVWorkspace();
-    if (!ws.length) return nil;
+    if (!ws.length) return @"https://dashscope.aliyuncs.com/api/v1";
     return [NSString stringWithFormat:@"https://%@.cn-beijing.maas.aliyuncs.com/api/v1", ws];
 }
 
@@ -32,7 +34,6 @@ static NSError* MVErr(NSString *msg) {
     NSString *host = [self maasHost];
     NSString *model = MVCurrentModel();
     if (!apiKey.length) { completion(nil, MVErr(@"未配置 DashScope API Key（设置→我的语音）")); return; }
-    if (!host)          { completion(nil, MVErr(@"未配置 DashScope 业务空间 ID（设置→我的语音→workspace）")); return; }
     if (!voiceID.length){ completion(nil, MVErr(@"未选择音色：请先在设置里克隆/选择一个音色")); return; }
     if (!text.length)  { completion(nil, MVErr(@"文字为空")); return; }
 
@@ -180,7 +181,6 @@ static NSError* MVErr(NSString *msg) {
     NSString *apiKey = MVAPIKey();
     NSString *host = [self maasHost];
     if (!apiKey.length) { completion(nil, MVErr(@"未配置 DashScope API Key")); return; }
-    if (!host)          { completion(nil, MVErr(@"未配置 workspace")); return; }
     NSData *audio = [NSData dataWithContentsOfFile:path];
     if (audio.length == 0) { completion(nil, MVErr(@"参考音频读取失败")); return; }
 

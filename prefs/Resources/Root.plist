@@ -73,7 +73,7 @@
 			<key>label</key>
 			<string>阿里云百炼 DashScope（克隆音色必填）</string>
 			<key>footerText</key>
-			<string>到 dashscope.console.aliyun.com 开通，选【北京】地域。声音复刻（克隆）免费；合成约 1.5 元/万字符，新用户送 1 万字符。API Key 只存在本机。</string>
+			<string>到 bailian.console.aliyun.com 开通，右上角地域选【华北2 北京】。只需填 API Key（sk- 开头，创建时只显示一次）。workspace 一般留空即可，除非你用子业务空间。API Key 只存在本机。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -95,13 +95,13 @@
 			<key>cell</key>
 			<string>PSEditTextCell</string>
 			<key>label</key>
-			<string>workspace</string>
+			<string>workspace（选填）</string>
 			<key>key</key>
 			<string>workspace</string>
 			<key>default</key>
 			<string></string>
 			<key>placeholder</key>
-			<string>业务空间 ID（百炼控制台可查）</string>
+			<string>留空即可，除非你用了子业务空间</string>
 			<key>PostNotification</key>
 			<string>com.yzdmm2024.myvoice/settings</string>
 		</dict>

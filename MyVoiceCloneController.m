@@ -43,8 +43,8 @@
         style:UIBarButtonItemStyleDone target:self action:@selector(dismiss)];
     self.navigationItem.rightBarButtonItem = close;
 
-    if (!MVAPIKey().length || !MVWorkspace().length) {
-        self.statusLabel.text = @"⚠️ 请先在 设置→我的语音 填写 DashScope API Key 与 workspace";
+    if (!MVAPIKey().length) {
+        self.statusLabel.text = @"⚠️ 请先在 设置→我的语音 填写 DashScope API Key";
     } else if (!MVOSSBucket().length) {
         self.statusLabel.text = @"⚠️ 请先在 设置→我的语音 填写 OSS（克隆需托管参考音频）";
     }
@@ -52,8 +52,8 @@
 
 - (void)toggleRec {
     if (self.recorder && self.recorder.isRecording) { [self.recorder stop]; return; }
-    if (!MVAPIKey().length || !MVWorkspace().length || !MVOSSBucket().length) {
-        self.statusLabel.text = @"⚠️ 请先在设置里配置 API Key / workspace / OSS";
+    if (!MVAPIKey().length || !MVOSSBucket().length) {
+        self.statusLabel.text = @"⚠️ 请先在设置里配置 API Key / OSS";
         return;
     }
     NSError *e = nil;
