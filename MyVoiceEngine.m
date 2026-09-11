@@ -12,7 +12,7 @@
 
 @implementation MyVoiceEngine
 
-+ (double)sampleRate { return 16000.0; }
++ (double)sampleRate { return MV_WECHAT_SR; }  // 24000，微信语音标准
 
 // 占位音：按字数估算时长（约 4 字/秒，1s~15s），生成 16kHz 单声道 S16 正弦，带包络防爆音。
 + (NSData*)placeholderPCM:(NSString*)text {

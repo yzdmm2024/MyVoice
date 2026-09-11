@@ -2,79 +2,20 @@
 #import "MyVoiceCommon.h"
 #import "MyVoiceResolver.h"
 #import "MyVoiceEngine.h"
-#import <substrate.h>
-#import <AudioToolbox/AudioToolbox.h>
-#import <dlfcn.h>
+#import "MyVoiceCloud.h"
+#import "MyVoiceSILK.h"
+#import "MyVoiceManager.h"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
 // ============================================================
-// 真实微信符号（从原 TTSFloat_v29 混淆表 XOR 解码还原，针对微信 8.0.7x）
-//   AudioSender  = 微信录音/发送对象（含 StartRecordFrom:ToUser:UserInfo: / StopRecord）
-//   StartRecordFrom:ToUser:UserInfo: = 启动一次真实录音会话
-//   StopRecord   = 结束录音（触发微信真实 SILK 编码 + 上传 + 气泡）
-// 发送真相：用 AudioSender 真实录音会话，把麦克风回调替换成 TTS 的 PCM，
-//          微信自己完成后续编码/发送，不手动回传 userData（避免 use-after-free 闪退）。
+// 直发语音消息（修复 8.0.76 没声音）
+// 旧方案 hook AudioQueue 把 PCM 塞进微信录音回调 —— 微信新版录音链路不走 AudioQueue，
+// 因此合成音频进不去，气泡生成但无声。
+// 新方案（参考 TTSFloat_v29）：合成 PCM → SILK 编码 → 调微信内部
+//   sendVoiceToWeChat:toUsr:  直接构造语音消息发出。
+// 目标类/选择器可在设置 sendClass 里微调（不同微信版本类名可能不同），默认 CMessageMgr。
 // ============================================================
-static NSString *const kAudioSenderCls = @"AudioSender";
-static NSString *const kStartSel  = @"StartRecordFrom:ToUser:UserInfo:";
-static NSString *const kStopSel   = @"StopRecord";
-
-// 会话身份（来自 StartRecordFrom 观察 hook 捕获）
-static NSString *g_lastToUsr = nil;          // 对方 wxid（聊天对象）
-static id g_lastFromParam = nil;             // 自己身份（CContact 或 wxid）
-static id g_lastUserInfoParam = nil;         // 录音会话 userData
-static id g_audioSender = nil;               // 当前 AudioSender 实例
-
-// 会话持久化 key（免捕捉：首次按住说话捕获后，跨启动直接可用）
-static NSString *const kSessionFromKey = @"MyVoiceFrom";
-static NSString *const kSessionToKey   = @"MyVoiceTo";
-static NSString *const kSessionInfoKey = @"MyVoiceInfo";
-
-// AudioQueue 注入：把麦克风输入回调替换成合成 PCM
-static NSData *g_pendingPCM = nil;
-static NSUInteger g_pcmOffset = 0;
-static BOOL g_replaceActive = NO;
-static BOOL g_pcmFedDone = NO;
-static AudioQueueInputCallback g_origAQCallback = NULL;
-
-static void MV_AQInputTrampoline(void *inUserData, AudioQueueRef inAQ,
-                                 AudioQueueBufferRef inBuffer,
-                                 const AudioTimeStamp *inStartTime,
-                                 UInt32 inNumPackets,
-                                 const AudioStreamPacketDescription *inPacketDesc) {
-    if (g_replaceActive && g_pendingPCM && inBuffer && inBuffer->mAudioData) {
-        @synchronized([MyVoiceSender class]) {
-            NSUInteger total = g_pendingPCM.length;
-            if (g_pcmOffset < total) {
-                // 整块填满（块内不留间隙，避免杂音），耗尽后整块补零
-                NSUInteger bufSz = inBuffer->mAudioDataByteSize;
-                NSUInteger take = MIN(bufSz, total - g_pcmOffset);
-                memcpy(inBuffer->mAudioData, (const char *)g_pendingPCM.bytes + g_pcmOffset, take);
-                if (take < bufSz) memset((char *)inBuffer->mAudioData + take, 0, bufSz - take);
-                g_pcmOffset += take;
-            } else {
-                memset(inBuffer->mAudioData, 0, inBuffer->mAudioDataByteSize);
-                if (!g_pcmFedDone) { g_pcmFedDone = YES; MVLog(@"[aq] PCM 全部喂完"); }
-            }
-        }
-    }
-    if (g_origAQCallback)
-        g_origAQCallback(inUserData, inAQ, inBuffer, inStartTime, inNumPackets, inPacketDesc);
-}
-
-// 原始 AudioQueueNewInput
-typedef OSStatus (*AQNewInputOrig)(const AudioStreamBasicDescription*, AudioQueueInputCallback, void*, CFRunLoopRef, CFStringRef, UInt32, AudioQueueRef*);
-static AQNewInputOrig orig_AudioQueueNewInput = NULL;
-
-static OSStatus MV_AudioQueueNewInput(const AudioStreamBasicDescription *inFormat,
-                                     AudioQueueInputCallback inCallback, void *inUserData,
-                                     CFRunLoopRef inRunLoop, CFStringRef inMode,
-                                     UInt32 inFlags, AudioQueueRef *outAQ) {
-    g_origAQCallback = inCallback;
-    if (g_replaceActive) MVLog(@"AudioQueueNewInput 拦截 → 注入合成 PCM");
-    return orig_AudioQueueNewInput(inFormat, MV_AQInputTrampoline, inUserData, inRunLoop, inMode, inFlags, outAQ);
-}
 
 @implementation MyVoiceSender
 
@@ -85,166 +26,113 @@ static OSStatus MV_AudioQueueNewInput(const AudioStreamBasicDescription *inForma
     return s;
 }
 
-#pragma mark - 会话身份捕获 / 持久化
+#pragma mark - 引擎选择
 
-+ (void)persistSessionFrom:(id)from to:(id)to info:(id)info {
-    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-    if ([to isKindOfClass:[NSString class]] && [(NSString*)to length])
-        [d setObject:to forKey:kSessionToKey];
-    if ([from isKindOfClass:[NSString class]] && [(NSString*)from length])
-        [d setObject:from forKey:kSessionFromKey];
-    if ([info isKindOfClass:[NSDictionary class]] && [(NSDictionary*)info count]) {
-        @try {
-            NSData *jd = [NSJSONSerialization dataWithJSONObject:info options:0 error:nil];
-            if (jd) [d setObject:[jd base64EncodedStringWithOptions:0] forKey:kSessionInfoKey];
-        } @catch (NSException *e) {}
+- (id<MyVoiceEngine>)engineForMode {
+    if (MVEngineMode() == 1) {
+        if (MVAPIKey().length && MVCurrentVoiceID().length) return [MyVoiceCloud shared];
+        MVLog(@"[sender] 云端模式但未配置 Key/音色，回退离线 AVSpeech");
     }
+    return [[NSClassFromString(@"MyVoiceAVSEngine") alloc] init];
 }
 
-+ (NSString*)capturedToUsr {
-    if (g_lastToUsr.length) return g_lastToUsr;
-    return [[NSUserDefaults standardUserDefaults] stringForKey:kSessionToKey];
-}
-+ (NSString*)capturedFrom {
-    if ([g_lastFromParam isKindOfClass:[NSString class]] && [(NSString*)g_lastFromParam length])
-        return g_lastFromParam;
-    return [[NSUserDefaults standardUserDefaults] stringForKey:kSessionFromKey];
-}
-+ (NSDictionary*)capturedUserInfo {
-    if ([g_lastUserInfoParam isKindOfClass:[NSDictionary class]]) return g_lastUserInfoParam;
-    NSString *b64 = [[NSUserDefaults standardUserDefaults] stringForKey:kSessionInfoKey];
-    if (!b64.length) return nil;
-    NSData *jd = [[NSData alloc] initWithBase64EncodedString:b64 options:0];
-    if (!jd) return nil;
-    id o = [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil];
-    return [o isKindOfClass:[NSDictionary class]] ? o : nil;
-}
-
-+ (id)audioSenderInstance {
-    @synchronized([MyVoiceSender class]) {
-        if (g_audioSender) return g_audioSender;
-        Class cls = NSClassFromString(kAudioSenderCls);
-        if (cls) {
-            @try {
-                id fresh = [[cls alloc] init];
-                if (fresh) { g_audioSender = fresh; MVLog(@"[sender] AudioSender 现场创建 %p（免捕捉）", (__bridge void*)fresh); }
-            } @catch (NSException *e) { MVLog(@"[sender] AudioSender 创建失败: %@", e); }
-        }
-        return g_audioSender;
-    }
-}
-
-#pragma mark - hook 安装
-
-- (void)installHook {
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        // 1) AudioQueue 注入
-        void *h = dlsym(RTLD_DEFAULT, "AudioQueueNewInput");
-        if (h && !orig_AudioQueueNewInput) {
-            MSHookFunction((void*)AudioQueueNewInput, (void*)MV_AudioQueueNewInput, (void**)&orig_AudioQueueNewInput);
-            MVLog(@"AudioQueueNewInput hook 已安装");
-        } else {
-            MVLog(@"AudioQueueNewInput hook 安装失败");
-        }
-        // 2) StartRecordFrom 观察 hook（捕获会话身份，免手动填）
-        Class cls = NSClassFromString(kAudioSenderCls);
-        if (!cls) { MVLog(@"[obs] 未找到 AudioSender 类"); return; }
-        SEL sel = NSSelectorFromString(kStartSel);
-        Method m = class_getInstanceMethod(cls, sel);
-        if (!m) { MVLog(@"[obs] StartRecordFrom MISS（微信版本可能已改名，待日志确认）"); return; }
-        IMP old = method_getImplementation(m);
-        IMP newImp = imp_implementationWithBlock(^BOOL(id self, id from, id toUsr, id userInfo) {
-            @synchronized([MyVoiceSender class]) {
-                g_lastFromParam = from;
-                g_lastToUsr = toUsr;
-                g_lastUserInfoParam = userInfo;
-                g_audioSender = self;
-                [MyVoiceSender persistSessionFrom:from to:toUsr info:userInfo];
-            }
-            MVLog(@"[obs] 捕获会话 from=%@ to=%@", from, toUsr);
-            return ((BOOL(*)(id,SEL,id,id,id))old)(self, sel, from, toUsr, userInfo);
-        });
-        method_setImplementation(m, newImp);
-        MVLog(@"[obs] StartRecordFrom 观察 hook 已装");
-    });
-}
-
-#pragma mark - 发送（文字 → 合成 → 注入真实录音链）
+#pragma mark - 发送主流程
 
 - (void)sendText:(NSString*)text toTalker:(NSString*)talker voiceID:(NSString*)voiceID {
     if (!text.length) { MVLog(@"send 取消：文字为空"); return; }
 
-    // 聊天对象优先级：面板传入（VC 自动识别）→ 捕获/持久化
-    NSString *peer = (talker.length ? talker : [MyVoiceSender capturedToUsr]);
+    NSString *peer = (talker.length ? talker : [MyVoiceResolver currentTalker]);
     if (!peer.length) {
-        MVLog(@"send 取消：无聊天对象（请先在微信聊天里按住说话一次以捕获会话）");
+        MVLog(@"send 取消：未识别聊天对象（请先打开该聊天页）");
+        [[MyVoiceManager shared] toast:@"未识别到聊天对象：请先打开微信聊天页"];
         return;
     }
-    NSString *myWxid = [MyVoiceSender capturedFrom];
-    NSDictionary *userInfo = [MyVoiceSender capturedUserInfo];
-    id sender = [MyVoiceSender audioSenderInstance];
-    if (!sender) { MVLog(@"send 取消：无 AudioSender 实例"); [MyVoiceSender cleanup]; return; }
 
-    MVLog(@"合成中 talker=%@ len=%lu", peer, (unsigned long)text.length);
-    [[MyVoiceEngine defaultEngine] synthesizeText:text voiceID:voiceID completion:^(NSData *pcm, NSError *err){
+    id<MyVoiceEngine> engine = [self engineForMode];
+    NSString *vid = (MVEngineMode() == 1) ? (voiceID.length ? voiceID : MVCurrentVoiceID()) : voiceID;
+
+    MVLog(@"合成中 talker=%@ mode=%ld len=%lu", peer, (long)MVEngineMode(), (unsigned long)text.length);
+    [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"正在合成并发送给 %@", peer]];
+
+    [engine synthesizeText:text voiceID:vid completion:^(NSData *pcm, NSError *err){
         if (!pcm || err) {
-            MVLog(@"AVS 合成失败，回退占位音：%@", err);
+            MVLog(@"合成失败 %@，回退占位音", err);
             pcm = [MyVoiceEngine placeholderPCM:text];
-            if (!pcm) { [MyVoiceSender cleanup]; return; }
         }
-        @synchronized([MyVoiceSender class]) {
-            g_pendingPCM = pcm; g_pcmOffset = 0; g_replaceActive = YES; g_pcmFedDone = NO;
-        }
-        MVLog(@"PCM 装填 %lu bytes ≈ %lums — 启动录音会话",
-              (unsigned long)pcm.length,
-              (unsigned long)(pcm.length*1000/(NSUInteger)([MyVoiceEngine sampleRate]*2)));
+        if (!pcm) { MVLog(@"send 取消：无 PCM"); return; }
 
-        SEL startSel = NSSelectorFromString(kStartSel);
-        BOOL ok = NO;
-        @try {
-            BOOL (*fn)(id,SEL,id,id,id) = (BOOL(*)(id,SEL,id,id,id))objc_msgSend;
-            ok = fn(sender, startSel, myWxid, peer, userInfo ?: @{});
-            MVLog(@"StartRecord ret=%d", ok);
-        } @catch (NSException *e) { MVLog(@"StartRecord 异常：%@", e); }
-
-        if (!ok) {
-            MVLog(@"StartRecord 返回 NO（请先在微信聊天里按住说话一次以捕获会话身份）");
-            @synchronized([MyVoiceSender class]) { g_replaceActive = NO; }
-            [MyVoiceSender cleanup];
+        NSData *silk = [[MyVoiceSILK shared] encodePCM:pcm];
+        if (!silk) {
+            MVLog(@"[silk] 编码失败：本进程无 SILK 符号，无法直发");
+            [[MyVoiceManager shared] toast:@"SILK 编码失败（请用 frida 脚本确认微信 SILK 符号）"];
             return;
         }
-        // 轮询等 PCM 喂完（g_pcmFedDone）再 StopRecord，避免截断
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
-            NSUInteger ms = pcm.length * 1000 / (NSUInteger)([MyVoiceEngine sampleRate]*2);
-            int capMs = 15000 + 2*(int)ms;
-            int waited = 0; BOOL fed = NO;
-            while (waited < capMs) {
-                [NSThread sleepForTimeInterval:0.1]; waited += 100;
-                @synchronized([MyVoiceSender class]) { fed = g_pcmFedDone; }
-                if (fed) { [NSThread sleepForTimeInterval:0.3]; break; }
-            }
-            [self finishRecording:sender];
-        });
+        [self directSend:silk toTalker:peer];
     }];
 }
 
-- (void)finishRecording:(id)sender {
-    SEL stopSel = NSSelectorFromString(kStopSel);
-    @try {
-        ((void(*)(id,SEL))objc_msgSend)(sender, stopSel);
-        MVLog(@"StopRecord done");
-    } @catch (NSException *e) { MVLog(@"StopRecord 异常：%@", e); }
-    // 稍后复位（等微信真实结束链跑完）
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5*NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        @synchronized([MyVoiceSender class]) { g_replaceActive = NO; g_pcmFedDone = NO; }
-        MVLog(@"[sender] 本次发送结束，等待微信真实链完成");
-    });
+#pragma mark - 解析微信发送目标
+
+// 返回 (target 实例, selector)。优先用设置里的 sendClass；否则按候选类 + 候选选择器自省。
+- (BOOL)resolveSendTarget:(id*)outTarget selector:(SEL*)outSel {
+    NSArray<NSString*> *classCands = nil;
+    NSString *cfg = [MVPrefs() stringForKey:@"sendClass"];
+    if (cfg.length) classCands = @[cfg];
+    else classCands = @[@"CMessageMgr", @"MMMsgLogicManager", @"MessageLogicController",
+                        @"CMessageWrap", @"WCMsgLogicManager"];
+
+    NSArray<NSString*> *selCands = [MyVoiceResolver sendVoiceCandidates];
+
+    for (NSString *cn in classCands) {
+        Class cls = NSClassFromString(cn);
+        if (!cls) continue;
+        // 先尝试 MMServiceCenter 取服务实例（CMessageMgr 等单例）
+        id target = [self serviceInstanceForClass:cls];
+        if (!target) {
+            @try { target = [[cls alloc] init]; } @catch (NSException *e) { target = nil; }
+        }
+        if (!target) continue;
+        for (NSString *sn in selCands) {
+            SEL s = NSSelectorFromString(sn);
+            if (s && [target respondsToSelector:s]) {
+                *outTarget = target; *outSel = s;
+                MVLog(@"[sender] 命中发送目标 %@ -%@", cn, sn);
+                return YES;
+            }
+        }
+    }
+    MVLog(@"[sender] 未找到可用的发送目标（类/选择器）。请用 frida 脚本确认微信版本对应的 sendVoiceToWeChat:toUsr: 所在类");
+    return NO;
 }
 
-+ (void)cleanup {
-    @synchronized([MyVoiceSender class]) { g_replaceActive = NO; g_pendingPCM = nil; g_pcmOffset = 0; g_pcmFedDone = NO; }
+- (id)serviceInstanceForClass:(Class)cls {
+    Class sc = NSClassFromString(@"MMServiceCenter");
+    if (!sc) return nil;
+    SEL dc = NSSelectorFromString(@"defaultCenter");
+    if (![sc respondsToSelector:dc]) return nil;
+    id center = ((id(*)(id,SEL))objc_msgSend)(sc, dc);
+    if (!center) return nil;
+    SEL gs = NSSelectorFromString(@"getService:");
+    if (![center respondsToSelector:gs]) return nil;
+    return ((id(*)(id,SEL,id))objc_msgSend)(center, gs, cls);
+}
+
+#pragma mark - 直发
+
+- (void)directSend:(NSData*)silk toTalker:(NSString*)peer {
+    id target = nil; SEL sel = NULL;
+    if (![self resolveSendTarget:&target selector:&sel]) {
+        [[MyVoiceManager shared] toast:@"未找到微信语音发送接口（见 frida 脚本）"];
+        return;
+    }
+    @try {
+        ((void(*)(id,SEL,id,id))objc_msgSend)(target, sel, silk, peer);
+        MVLog(@"[sender] 已调用 sendVoiceToWeChat:toUsr: 直发 %lu bytes → %@", (unsigned long)silk.length, peer);
+        [[MyVoiceManager shared] toast:@"已发送语音（克隆音色）"];
+    } @catch (NSException *e) {
+        MVLog(@"[sender] 直发异常 %@", e);
+        [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"直发异常：%@", e.reason]];
+    }
 }
 
 @end

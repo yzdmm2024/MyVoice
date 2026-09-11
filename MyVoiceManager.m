@@ -9,7 +9,6 @@
 + (instancetype)shared { static id s; static dispatch_once_t t; dispatch_once(&t,^{ s=[[self alloc] init]; }); return s; }
 
 - (void)setup {
-    [[MyVoiceSender shared] installHook];
     if (MVEnabled()) {
         [[MyVoicePanel shared] show];
         MVLog(@"已启用，浮动面板已创建");
@@ -39,7 +38,7 @@
     }
     MVLog(@"发送请求：talker=%@ text=%@", talker, text);
     [self toast:[NSString stringWithFormat:@"正在合成并发送给 %@", talker]];
-    [[MyVoiceSender shared] sendText:text toTalker:talker voiceID:MVVoiceID()];
+    [[MyVoiceSender shared] sendText:text toTalker:talker voiceID:MVCurrentVoiceID()];
 }
 
 - (void)toast:(NSString*)msg {
