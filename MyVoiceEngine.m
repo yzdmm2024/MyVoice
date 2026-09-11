@@ -1,4 +1,5 @@
 #import "MyVoiceEngine.h"
+#import "MyVoiceCommon.h"
 #import <AVFoundation/AVFoundation.h>
 
 // 内置 Sine 占位引擎：无外部依赖的兜底，保证 AVS 失败时管线仍能跑通。
