@@ -28,11 +28,13 @@
 
 - (void)handleSendText:(NSString*)text {
     if (!MVEnabled()) { MVLog(@"未启用"); return; }
+    // 聊天对象优先级：① VC 自动识别 → ② 捕获/持久化的会话
     NSString *talker = [MyVoiceResolver currentTalker];
+    if (!talker.length) talker = [MyVoiceSender capturedToUsr];
     if (!talker.length) {
         MVLog(@"未识别到聊天对象");
         MVLog(@"%@", [MyVoiceResolver debugChatInfo]);
-        [self toast:@"未识别到聊天对象，请先进入一个聊天"];
+        [self toast:@"未识别到聊天对象：请先在微信聊天里按住说话一次（捕获会话）"];
         return;
     }
     MVLog(@"发送请求：talker=%@ text=%@", talker, text);

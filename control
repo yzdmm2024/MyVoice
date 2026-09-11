@@ -1,6 +1,6 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 1.0.2
+Version: 1.0.3
 Architecture: iphoneos-arm64
 Description: 微信文字转语音浮动助手（离线系统TTS，纯功能，不上传任何内容）
 Maintainer: yzdmm2024
