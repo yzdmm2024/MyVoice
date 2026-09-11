@@ -105,6 +105,14 @@
 			<key>PostNotification</key>
 			<string>com.yzdmm2024.myvoice/settings</string>
 		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>测试 API Key 是否可用</string>
+			<key>action</key>
+			<string>testAPIKey</string>
+		</dict>
 
 		<dict>
 			<key>cell</key>
@@ -112,7 +120,7 @@
 			<key>label</key>
 			<string>对象存储 OSS（只做「录音复刻」才需要）</string>
 			<key>footerText</key>
-			<string>用「文字设计」创建音色的话，这里整段可以全部留空、完全不用配。只有「录音复刻」才要把参考音频托管到公网 URL 给百炼抓取：建一个 Bucket（地域选北京、读写权限设公共读），Endpoint 填 oss-cn-beijing.aliyuncs.com（不带 https://）。</string>
+			<string>用「文字设计」创建音色的话，这里整段可以全部留空、完全不用配（下面的测试按钮也不用点）。只有「录音复刻」才要把参考音频托管到公网 URL 给百炼抓取：OSS 控制台建一个 Bucket（地域选北京、关掉「阻止公共访问」、读写权限设公共读），Endpoint 填 oss-cn-beijing.aliyuncs.com（不带 https://、不带 bucket 名）。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -159,6 +167,14 @@
 			<string></string>
 			<key>isPassword</key>
 			<true/>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>测试 OSS 地址与公共读</string>
+			<key>action</key>
+			<string>testOSS</string>
 		</dict>
 
 		<dict>

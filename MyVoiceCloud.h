@@ -7,6 +7,10 @@
 @interface MyVoiceCloud : NSObject <MyVoiceEngine>
 + (instancetype)shared;
 
+// 连通性自检：故意发一个"参数不完整"的请求，靠 HTTP 状态码判断鉴权是否通过。
+// 不产生费用、不创建音色、无副作用。ok=YES 表示 Key 可用。
+- (void)testAPIKeyWithCompletion:(void(^)(BOOL ok, NSString *message))completion;
+
 // TTS（MyVoiceEngine 协议）：text + voiceID → 24k 单声道 S16 PCM
 - (void)synthesizeText:(NSString*)text voiceID:(NSString*)voiceID completion:(void(^)(NSData* pcm, NSError* err))completion;
 

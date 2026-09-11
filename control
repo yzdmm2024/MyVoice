@@ -1,8 +1,8 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 2.0.11
+Version: 2.0.12
 Architecture: iphoneos-arm64
-Description: 微信文字转语音（克隆你的音色，阿里云百炼CosyVoice）；workspace 留空即可（默认业务空间走 dashscope 域名，只需 API Key）；SILK直发修复8.0.76没声音
+Description: 微信文字转语音（阿里云百炼 CosyVoice）。新增「测试」：设置面板里可一键测 API Key 是否可用、测 OSS 地址与公共读；微信内「音色管理 → 测试配置」可验证跨进程读取。文字设计免 OSS 免录音。
 Maintainer: yzdmm2024
 Author: yzdmm2024
 Section: Tweaks

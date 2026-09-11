@@ -86,9 +86,29 @@
 
     UIBarButtonItem *close = [[UIBarButtonItem alloc] initWithTitle:@"完成"
         style:UIBarButtonItemStyleDone target:self action:@selector(dismiss)];
-    self.navigationItem.rightBarButtonItem = close;
+    UIBarButtonItem *test = [[UIBarButtonItem alloc] initWithTitle:@"测试配置"
+        style:UIBarButtonItemStylePlain target:self action:@selector(testKey)];
+    self.navigationItem.rightBarButtonItems = @[close, test];
 
     [self updateMode];
+}
+
+// 一键自检：先确认设置里的 Key 是否真的被微信进程读到了（跨进程读取），再验证 Key 有效
+- (void)testKey {
+    NSString *key = MVAPIKey();
+    if (!key.length) {
+        self.statusLabel.text = @"❌ 没读到 API Key。\n请到「设置 → 我的语音」填入后，回来点右上角「完成」重开一次。";
+        return;
+    }
+    self.statusLabel.text = [NSString stringWithFormat:@"已读到 API Key：sk-…%@（共 %lu 位）\n正在测试…",
+                             [key substringFromIndex:MAX(0, (NSInteger)key.length - 4)],
+                             (unsigned long)key.length];
+    __weak typeof(self) ws = self;
+    [[MyVoiceCloud shared] testAPIKeyWithCompletion:^(BOOL ok, NSString *msg){
+        __strong typeof(ws) self = ws;
+        if (!self) return;
+        self.statusLabel.text = [NSString stringWithFormat:@"%@\n\n%@", ok ? @"✅ 配置可用" : @"❌ 配置有问题", msg];
+    }];
 }
 
 // 切换模式：显隐对应控件 + 下移状态栏 + 给出当前模式的就绪提示

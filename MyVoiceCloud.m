@@ -27,6 +27,58 @@ static NSError* MVErr(NSString *msg) {
     return [NSString stringWithFormat:@"https://%@.cn-beijing.maas.aliyuncs.com/api/v1", ws];
 }
 
+#pragma mark - 连通性自检
+
+// 只发一个空 body 的 POST：鉴权（Key 有效性）在参数校验之前执行，所以
+//   200/400 → Key 有效（400 只是参数不全）
+//   401     → Key 无效；403 → 未开通/地域或业务空间不对
+// 这样既能真正验证 Key，又不消耗额度、不产生任何侧效应。
+- (void)testAPIKeyWithCompletion:(void(^)(BOOL, NSString*))completion {
+    void (^fin)(BOOL, NSString*) = ^(BOOL ok, NSString *m){
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(ok, m); });
+    };
+    NSString *apiKey = MVAPIKey();
+    if (!apiKey.length) {
+        fin(NO, @"未配置 API Key（设置 → 我的语音）。");
+        return;
+    }
+    NSString *host = [self maasHost];
+    NSString *url = [host stringByAppendingString:@"/services/audio/tts/customization"];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
+    req.HTTPMethod = @"POST";
+    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    [req setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+    req.HTTPBody = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];
+    req.timeoutInterval = 20;
+    MVLog(@"[cloud] 自检 POST %@", url);
+
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req
+        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e){
+        if (e) {
+            MVLog(@"[cloud] 自检网络错误 %@", e);
+            fin(NO, [NSString stringWithFormat:@"网络错误：%@\n（检查手机能否上网／是否开了代理、VPN）",
+                     e.localizedDescription]);
+            return;
+        }
+        NSInteger code = [(NSHTTPURLResponse*)r statusCode];
+        NSString *body = [[NSString alloc] initWithData:d ?: [NSData data] encoding:NSUTF8StringEncoding] ?: @"";
+        if (body.length > 240) body = [[body substringToIndex:240] stringByAppendingString:@"…"];
+        MVLog(@"[cloud] 自检 HTTP %ld %@", (long)code, body);
+
+        if (code == 200 || code == 400) {
+            fin(YES, @"API Key 有效，接口可以正常访问。\n（自检请求是故意发不完整的，400 属正常）");
+        } else if (code == 401) {
+            fin(NO, @"API Key 无效（401）。请确认 sk- 后面没漏字符，或重新创建一个。");
+        } else if (code == 403) {
+            fin(NO, [NSString stringWithFormat:
+                @"被拒绝（403）。常见原因：① 百炼没开通；② 控制台地域不是「华北2 北京」；"
+                @"③ 用了子业务空间但 workspace 没填。\n%@", body]);
+        } else {
+            fin(NO, [NSString stringWithFormat:@"返回意外状态 %ld：\n%@", (long)code, body]);
+        }
+    }] resume];
+}
+
 #pragma mark - TTS（合成）
 
 - (void)synthesizeText:(NSString*)text voiceID:(NSString*)voiceID completion:(void(^)(NSData*,NSError*))completion {
