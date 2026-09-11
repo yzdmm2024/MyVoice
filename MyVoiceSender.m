@@ -98,11 +98,11 @@ static OSStatus MV_AudioQueueNewInput(const AudioStreamBasicDescription* inForma
 - (void)startWeChatRecording:(NSString*)talker {
     Class chatCls = [MyVoiceResolver classWithCandidates:[MyVoiceResolver chatVCCandidates]];
     UIViewController *vc = [self findChatVC:chatCls];
-    if (!vc) { MVLog(@"未找到聊天 VC，无法触发录音"); [self cleanup]; return; }
+    if (!vc) { MVLog(@"未找到聊天 VC，无法触发录音"); [MyVoiceSender cleanup]; return; }
     SEL sel = [MyVoiceResolver selectorWithCandidates:[vc class] names:[MyVoiceResolver recordStartCandidates]];
-    if (!sel) { MVLog(@"未解析到录音开始方法"); [self cleanup]; return; }
+    if (!sel) { MVLog(@"未解析到录音开始方法"); [MyVoiceSender cleanup]; return; }
     NSMethodSignature *sig = [[vc class] instanceMethodSignatureForSelector:sel];
-    if (!sig) { MVLog(@"无方法签名：%@", NSStringFromSelector(sel)); [self cleanup]; return; }
+    if (!sig) { MVLog(@"无方法签名：%@", NSStringFromSelector(sel)); [MyVoiceSender cleanup]; return; }
     NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
     inv.target = vc; inv.selector = sel;
     NSUInteger nargs = sig.numberOfArguments - 2;
@@ -111,7 +111,7 @@ static OSStatus MV_AudioQueueNewInput(const AudioStreamBasicDescription* inForma
         else { id nilArg = nil; [inv setArgument:&nilArg atIndex:2+i]; }
     }
     @try { [inv invoke]; MVLog(@"已触发微信录音：%@ @ %@", NSStringFromSelector(sel), NSStringFromClass([vc class])); }
-    @catch (NSException *e) { MVLog(@"触发录音异常：%@", e); [self cleanup]; }
+    @catch (NSException *e) { MVLog(@"触发录音异常：%@", e); [MyVoiceSender cleanup]; }
 }
 
 + (void)finishRecording {

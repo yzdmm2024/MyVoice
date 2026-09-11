@@ -10,4 +10,7 @@
 - (void)installHook;   // 安装 AudioQueueNewInput 拦截（只装一次）
 // 触发一次合成语音发送：text 合成 PCM 后，唤起微信录音并喂入。
 - (void)sendText:(NSString*)text toTalker:(NSString*)talker voiceID:(NSString*)voiceID;
+// 类方法：操作全局录制状态（C 函数回调与主线程收尾共用）
++ (void)finishRecording;
++ (void)cleanup;
 @end
