@@ -181,7 +181,11 @@ static OSStatus MV_AudioQueueNewInput(const AudioStreamBasicDescription *inForma
 
     MVLog(@"合成中 talker=%@ len=%lu", peer, (unsigned long)text.length);
     [[MyVoiceEngine defaultEngine] synthesizeText:text voiceID:voiceID completion:^(NSData *pcm, NSError *err){
-        if (!pcm || err) { MVLog(@"合成失败：%@", err); [MyVoiceSender cleanup]; return; }
+        if (!pcm || err) {
+            MVLog(@"AVS 合成失败，回退占位音：%@", err);
+            pcm = [MyVoiceEngine placeholderPCM:text];
+            if (!pcm) { [MyVoiceSender cleanup]; return; }
+        }
         @synchronized([MyVoiceSender class]) {
             g_pendingPCM = pcm; g_pcmOffset = 0; g_replaceActive = YES; g_pcmFedDone = NO;
         }
