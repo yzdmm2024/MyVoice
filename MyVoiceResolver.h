@@ -20,4 +20,6 @@
 // 当前聊天对象 wxid（遍历 VC 树取 talker ivar）
 + (NSString*)currentTalker;
 + (UIViewController*)topViewController;
+// 调试：dump 当前聊天 VC 类名与联系人相关字段，用于精修微信版本符号
++ (NSString*)debugChatInfo;
 @end
