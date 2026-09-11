@@ -8,6 +8,17 @@
 @implementation MyVoiceManager
 + (instancetype)shared { static id s; static dispatch_once_t t; dispatch_once(&t,^{ s=[[self alloc] init]; }); return s; }
 
+// Darwin 通知回调（设置面板在另一个进程，NSNotificationCenter 过不来）
+static void MVSettingsChanged(CFNotificationCenterRef center, void *observer,
+                              CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        BOOL on = MVEnabled();
+        if (on) [[MyVoicePanel shared] show]; else [[MyVoicePanel shared] hide];
+        MVLog(@"设置变更（跨进程），启用=%d 引擎=%ld 音色数=%lu",
+              on, (long)MVEngineMode(), (unsigned long)MVVoices().count);
+    });
+}
+
 - (void)setup {
     if (MVEnabled()) {
         [[MyVoicePanel shared] show];
@@ -15,14 +26,11 @@
     } else {
         MVLog(@"设置中未启用");
     }
-    // 监听设置变更
-    [[NSNotificationCenter defaultCenter] addObserverForName:@"com.yzdmm2024.myvoice/settings"
-                                                      object:nil queue:[NSOperationQueue mainQueue]
-                                                  usingBlock:^(NSNotification *n){
-        BOOL on = MVEnabled();
-        if (on) [[MyVoicePanel shared] show]; else [[MyVoicePanel shared] hide];
-        MVLog(@"设置变更，启用=%d", on);
-    }];
+    // 监听跨进程设置变更（Darwin notify）
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                    NULL, MVSettingsChanged,
+                                    CFSTR(MV_CHANGED_NOTIFY), NULL,
+                                    CFNotificationSuspensionBehaviorDeliverImmediately);
 }
 
 - (void)handleSendText:(NSString*)text {

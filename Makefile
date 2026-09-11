@@ -29,6 +29,8 @@ after-build::
 	@cp .theos/obj/MyVoice.dylib .theos/artifacts/MyVoice.dylib 2>/dev/null || true
 	@echo "[MyVoice] 构建完成：deb 走 Sileo，dylib 位于 .theos/artifacts/MyVoice.dylib 可直接 TrollFools 注入"
 
-# 设置面板作为子工程
+# 设置面板作为子工程。
+# 注意：必须用 aggregate.mk（它读裸 SUBPROJECTS 并在 internal-stage 里递归 stage 子工程）；
+# 用 subproject.mk 只会读 $(TWEAK_NAME)_SUBPROJECTS，面板永远不会被构建/打包。
 SUBPROJECTS += prefs
-include $(THEOS_MAKE_PATH)/subproject.mk
+include $(THEOS_MAKE_PATH)/aggregate.mk

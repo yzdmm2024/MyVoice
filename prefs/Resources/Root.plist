@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>title</key>
+	<string>我的语音</string>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>总开关</string>
+			<key>footerText</key>
+			<string>微信文字转语音：捕获你输入的文字，用系统语音或你克隆的音色合成语音消息发出。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>启用</string>
+			<key>key</key>
+			<string>enabled</string>
+			<key>default</key>
+			<true/>
+			<key>PostNotification</key>
+			<string>com.yzdmm2024.myvoice/settings</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>合成引擎</string>
+			<key>footerText</key>
+			<string>离线＝系统中文语音（机器人音，免费、不联网）；克隆音色＝用你自己的声音（需下方 API Key + workspace，并先在微信里克隆音色）。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSegmentCell</string>
+			<key>label</key>
+			<string>引擎</string>
+			<key>key</key>
+			<string>engineMode</string>
+			<key>validValues</key>
+			<array>
+				<integer>0</integer>
+				<integer>1</integer>
+			</array>
+			<key>validTitles</key>
+			<array>
+				<string>离线</string>
+				<string>克隆音色</string>
+			</array>
+			<key>default</key>
+			<integer>1</integer>
+			<key>PostNotification</key>
+			<string>com.yzdmm2024.myvoice/settings</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>克隆音色怎么用</string>
+			<key>footerText</key>
+			<string>克隆在微信里做（设置里没有麦克风权限）：打开微信任意聊天 → 点屏幕上的悬浮球 “V” → 点“克隆音色” → 朗读 15~30 秒 → 保存。之后在悬浮球面板里选音色即可切换。</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>阿里云百炼 DashScope（克隆音色必填）</string>
+			<key>footerText</key>
+			<string>到 dashscope.console.aliyun.com 开通，选【北京】地域。声音复刻（克隆）免费；合成约 1.5 元/万字符，新用户送 1 万字符。API Key 只存在本机。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>label</key>
+			<string>API Key</string>
+			<key>key</key>
+			<string>apiKey</string>
+			<key>default</key>
+			<string></string>
+			<key>isPassword</key>
+			<true/>
+			<key>placeholder</key>
+			<string>sk-xxxxxxxx</string>
+			<key>PostNotification</key>
+			<string>com.yzdmm2024.myvoice/settings</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>label</key>
+			<string>workspace</string>
+			<key>key</key>
+			<string>workspace</string>
+			<key>default</key>
+			<string></string>
+			<key>placeholder</key>
+			<string>业务空间 ID（百炼控制台可查）</string>
+			<key>PostNotification</key>
+			<string>com.yzdmm2024.myvoice/settings</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>对象存储 OSS（克隆音色必填）</string>
+			<key>footerText</key>
+			<string>克隆时要把参考音频托管到一个公网可访问的 URL 给百炼抓取。填你自己的 OSS Bucket / Endpoint / AccessKey。音频仅一次性用于复刻。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>label</key>
+			<string>Bucket</string>
+			<key>key</key>
+			<string>ossBucket</string>
+			<key>default</key>
+			<string></string>
+			<key>placeholder</key>
+			<string>myvoice-audio</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>label</key>
+			<string>Endpoint</string>
+			<key>key</key>
+			<string>ossHost</string>
+			<key>default</key>
+			<string></string>
+			<key>placeholder</key>
+			<string>oss-cn-hangzhou.aliyuncs.com</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>label</key>
+			<string>AccessKey</string>
+			<key>key</key>
+			<string>ossAk</string>
+			<key>default</key>
+			<string></string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>label</key>
+			<string>Secret</string>
+			<key>key</key>
+			<string>ossSk</string>
+			<key>default</key>
+			<string></string>
+			<key>isPassword</key>
+			<true/>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>高级</string>
+			<key>footerText</key>
+			<string>一般无需改。若发送语音失败，先用 frida 确认微信内 sendVoiceToWeChat:toUsr: 所在类名（可留空自动探测）。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>label</key>
+			<string>sendClass</string>
+			<key>key</key>
+			<string>sendClass</string>
+			<key>default</key>
+			<string></string>
+			<key>placeholder</key>
+			<string>留空自动探测</string>
+		</dict>
+	</array>
+</dict>
+</plist>
