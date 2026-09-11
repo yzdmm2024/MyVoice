@@ -97,12 +97,18 @@
 - (void)testKey {
     NSString *key = MVAPIKey();
     if (!key.length) {
-        self.statusLabel.text = @"❌ 没读到 API Key。\n请到「设置 → 我的语音」填入后，回来点右上角「完成」重开一次。";
+        self.statusLabel.text = [NSString stringWithFormat:
+            @"❌ 没读到 API Key。\n\n读取来源自检：\n%@\n\n"
+            @"如果 ① 不是「有」，说明设置还没写进越狱共享文件：\n"
+            @"· 到「设置 → 我的语音」把 Key 重填一次\n"
+            @"· 点一下那里的「测试 API Key 是否可用」（这一步会触发落盘）\n"
+            @"· 再回这里点「测试配置」", MVReadDiag()];
         return;
     }
-    self.statusLabel.text = [NSString stringWithFormat:@"已读到 API Key：sk-…%@（共 %lu 位）\n正在测试…",
-                             [key substringFromIndex:MAX(0, (NSInteger)key.length - 4)],
-                             (unsigned long)key.length];
+    self.statusLabel.text = [NSString stringWithFormat:
+        @"已读到 API Key：…%@（共 %lu 位）\n\n读取来源自检：\n%@\n\n正在测试接口…",
+        [key substringFromIndex:MAX(0, (NSInteger)key.length - 4)],
+        (unsigned long)key.length, MVReadDiag()];
     __weak typeof(self) ws = self;
     [[MyVoiceCloud shared] testAPIKeyWithCompletion:^(BOOL ok, NSString *msg){
         __strong typeof(ws) self = ws;

@@ -123,6 +123,19 @@ static NSString* MVCleanHost(NSString *h) {
 
 #pragma mark - 测试 DashScope API Key
 
+// rootless 越狱下，本面板写出的域配置落到 jbroot 里；微信侧是直接读这个文件的。
+// 这里顺手确认一下它到底写没写进去（避免"设置里能用、微信里读不到"）。
+static NSString* MVSharedFileStatus(void) {
+    NSString *p = @"/var/jb/var/mobile/Library/Preferences/com.yzdmm2024.myvoice.plist";
+    NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:p];
+    if (![d isKindOfClass:[NSDictionary class]])
+        return [NSString stringWithFormat:@"⚠️ 共享配置文件还没生成：\n%@\n（微信里会读不到，改完设置点一次这里即可）", p];
+    id k = d[@"apiKey"];
+    if ([k isKindOfClass:[NSString class]] && [k length])
+        return [NSString stringWithFormat:@"✅ 共享配置已写入：%@\n（微信就是直接读这个文件）", p];
+    return [NSString stringWithFormat:@"⚠️ 共享配置存在但没有 apiKey：%@", p];
+}
+
 - (void)testAPIKey {
     [self.view endEditing:YES];
     PSSpecifier *sp = [self mv_specifierForAction:@"testAPIKey"];
@@ -164,8 +177,8 @@ static NSString* MVCleanHost(NSString *h) {
         if (code == 200 || code == 400) {
             [self mv_alert:YES title:@"API Key 有效"
                   message:[NSString stringWithFormat:
-                      @"接口可以正常访问，Key 没问题。\n\n（这是故意发的不完整请求，回 400 是正常的）\n请求地址：%@",
-                      host]];
+                      @"接口可以正常访问，Key 没问题。\n\n（这是故意发的不完整请求，回 400 是正常的）\n请求地址：%@\n\n%@",
+                      host, MVSharedFileStatus()]];
         } else if (code == 401) {
             [self mv_alert:NO title:@"API Key 无效（401）"
                   message:@"请确认 sk- 后面没漏字符；或到 bailian.console.aliyun.com 重新创建一个（只显示一次）。"];

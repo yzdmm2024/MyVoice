@@ -1,8 +1,8 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 2.0.12
+Version: 2.0.13
 Architecture: iphoneos-arm64
-Description: 微信文字转语音（阿里云百炼 CosyVoice）。新增「测试」：设置面板里可一键测 API Key 是否可用、测 OSS 地址与公共读；微信内「音色管理 → 测试配置」可验证跨进程读取。文字设计免 OSS 免录音。
+Description: 微信文字转语音（阿里云百炼 CosyVoice）。修复「设置里能用、微信里读不到」：改为直接读 rootless 共享配置 /var/jb/var/mobile/Library/Preferences/；「测试配置」现在会显示读取来源。悬浮面板支持全屏拖动 + 右下角关闭。文字设计免 OSS 免录音。
 Maintainer: yzdmm2024
 Author: yzdmm2024
 Section: Tweaks

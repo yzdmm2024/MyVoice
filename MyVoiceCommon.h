@@ -18,21 +18,74 @@ static inline NSUserDefaults* MVPrefs(void) {
     return d;
 }
 
-// 稳健读取：① 共享 suite → ② cfprefsd 域 → ③ 直接读 plist（微信沙箱下的兜底）。
-// 设置面板写的是 ①+②，三种路径任一命中即可，避免"填了不生效"。
+// ---- 跨进程共享配置的真实落点（rootless 越狱）----
+// 设置面板跑在 Settings 进程里，它写出的域配置实际落在 jbroot 内：
+//     /var/jb/var/mobile/Library/Preferences/com.yzdmm2024.myvoice.plist
+// 而 App 进程（微信）内的 cfprefsd 会把这个域映射到**自己的容器**，所以
+//   【必须直接读上面那个文件】，CFPreferences 能读到才是意外。
+// 实测（iPhone 12 Pro / iOS 16.6.1 / RootHide，frida 注入 WeChat 验证）：
+//   · /var/jb/var/mobile/Library/Preferences/ 目录与文件：可读、可解析 ✅
+//   · /var/mobile/Library/Preferences/ 整个目录：不可读（Operation not permitted）❌
+//   · CFPreferencesCopyAppValue(本域)：null ❌（容器映射）
+//   · initWitSuiteName: 读到的其实是 App 自己的 standard defaults ❌
+#define MV_JBROOT_PREFS @"/var/jb/var/mobile/Library/Preferences/"
+#define MV_GLOBAL_PREFS @"/var/mobile/Library/Preferences/"
+
+// 读取越狱共享域的 plist（带 mtime 缓存：MVGet 调用很频繁，不能每次都 stat+解析）
+static inline NSDictionary* MVSharedPrefs(void) {
+    static NSDictionary *cache = nil;
+    static NSDate *cacheMTime = nil;
+    static NSString *cachePath = nil;
+    NSArray *cands = @[
+        [MV_JBROOT_PREFS stringByAppendingFormat:@"%@.plist", MV_PREFS_ID],
+        [MV_GLOBAL_PREFS stringByAppendingFormat:@"%@.plist", MV_PREFS_ID]
+    ];
+    for (NSString *p in cands) {
+        NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:p error:nil];
+        if (!attrs) continue;
+        NSDate *mt = attrs[NSFileModificationDate];
+        if (cache && cachePath && [cachePath isEqualToString:p] && [mt isEqualToDate:cacheMTime]) return cache;
+        NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:p];
+        if ([d isKindOfClass:[NSDictionary class]]) {
+            cache = d; cacheMTime = mt; cachePath = p;
+            return d;
+        }
+    }
+    return cache;   // 文件不在（或读不到）时退回上一次的缓存
+}
+
+// 稳健读取：① 共享域 plist（jbroot，真正管用的那条）→ ② 共享 suite（容器内）
+//          → ③ cfprefsd 域 → ④ 容器里的同名 plist
 static inline id MVGet(NSString *key) {
-    id v = [MVPrefs() objectForKey:key];
+    NSDictionary *shared = MVSharedPrefs();
+    id v = shared[key];
+    if (v) return v;
+    v = [MVPrefs() objectForKey:key];
     if (v) return v;
     CFPropertyListRef cv = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
                                                      (__bridge CFStringRef)MV_PREFS_ID);
     if (cv) return CFBridgingRelease(cv);
-    NSString *p = [@"/var/mobile/Library/Preferences/" stringByAppendingFormat:@"%@.plist", MV_PREFS_ID];
-    NSDictionary *file = [NSDictionary dictionaryWithContentsOfFile:p];
+    NSDictionary *file = [NSDictionary dictionaryWithContentsOfFile:
+        [MV_GLOBAL_PREFS stringByAppendingFormat:@"%@.plist", MV_PREFS_ID]];
     return file[key];
 }
 static inline NSString* MVGetStr(NSString *key) {
     id v = MVGet(key);
     return [v isKindOfClass:[NSString class]] ? v : (v ? [v description] : @"");
+}
+
+// 读取来源自检（给「测试配置」用）：告诉你这个值究竟是从哪条通道读到的
+static inline NSString* MVReadDiag(void) {
+    NSMutableString *s = [NSMutableString string];
+    NSDictionary *shared = MVSharedPrefs();
+    [s appendFormat:@"① 越狱共享文件 %@: %@\n",
+        MV_JBROOT_PREFS, shared[@"apiKey"] ? @"有 ✅" : (shared ? @"文件在但无 apiKey" : @"读不到")];
+    [s appendFormat:@"② 容器 suite: %@\n", [MVPrefs() objectForKey:@"apiKey"] ? @"有" : @"无"];
+    CFPropertyListRef cv = CFPreferencesCopyAppValue(CFSTR("apiKey"),
+                                                     (__bridge CFStringRef)MV_PREFS_ID);
+    [s appendFormat:@"③ cfprefsd: %@", cv ? @"有" : @"无（正常，微信里会被容器映射）"];
+    if (cv) CFRelease(cv);
+    return s;
 }
 
 static inline BOOL MVEnabled(void)    { id v = MVGet(@"enabled"); return v ? [v boolValue] : YES; }
