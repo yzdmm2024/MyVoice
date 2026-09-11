@@ -112,8 +112,7 @@ static NSError* MVErr(NSString *msg) {
         AVAudioPCMBuffer *outBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFmt
                                                                 frameCapacity:inBuf.frameLength];
         NSError *cerr = nil;
-        [conv convertToBuffer:outBuf error:&cerr withInputFromBlock:^AVAudioBuffer*(AVAudioPacketCount *npackets, AVAudioConverterInputStatus *status){
-            *npackets = inBuf.frameLength;
+        [conv convertToBuffer:outBuf error:&cerr withInputFromBlock:^AVAudioBuffer*(AVAudioPacketCount npackets, AVAudioConverterInputStatus *status){
             *status = AVAudioConverterInputStatus_HaveData;
             return inBuf;
         }];
@@ -134,9 +133,7 @@ static NSError* MVErr(NSString *msg) {
     if (!bucket.length || !host.length || !ak.length || !sk.length) {
         completion(nil, MVErr(@"未配置 OSS（设置→我的语音→OSS）")); return;
     }
-    NSString *date = [[NSDate date] descriptionWithLocale:nil]; // 占位，下面用 RFC1123
-    date = [self rfc1123];
-    NSString *contentMD5 = @""; // 微信参考音频不大，可省略；OSS 不强制
+    NSString *date = [self rfc1123];
     NSString *stringToSign = [NSString stringWithFormat:@"PUT\n\n%@\n%@\n/%@/%@",
                               ct ?: @"audio/wav", date, bucket, key];
     NSString *sig = [self hmacSHA1:sk string:stringToSign];
