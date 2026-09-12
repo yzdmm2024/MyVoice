@@ -11,8 +11,22 @@
 // 不产生费用、不创建音色、无副作用。ok=YES 表示 Key 可用。
 - (void)testAPIKeyWithCompletion:(void(^)(BOOL ok, NSString *message))completion;
 
-// TTS（MyVoiceEngine 协议）：text + voiceID → 24k 单声道 S16 PCM
+// TTS（MyVoiceEngine 协议）：text + voiceID → 16k 单声道 S16 PCM
+// ★ 2.2.7：本方法自带【结果缓存】（key = 服务商|模型|音色|语气|语速|文字）。
+//   命中缓存时**零网络请求**直接回调 —— 这是消除「点发送后还要等合成」的关键。
 - (void)synthesizeText:(NSString*)text voiceID:(NSString*)voiceID completion:(void(^)(NSData* pcm, NSError* err))completion;
+
+// ★ 2.2.7 后台预合成：只把结果填进缓存，不发送、不发声。
+//   面板里文字变化后调用它，用户点「发送」时就能命中缓存（合成耗时 0）。
+//   已缓存 / 离线引擎 / 没配 Key 时直接返回，绝不打扰用户。
+- (void)prewarmText:(NSString*)text voiceID:(NSString*)voiceID;
+
+// ★ 2.2.7 连接预热：提前建好 DNS+TLS（实测首次合成 0.89s 里约 0.3~0.4s 花在握手上）。
+//   幂等：默认 5 分钟内只暖一次。打开面板时调一次即可。
+- (void)prewarmConnection;
+
+// 清空合成缓存（换 Key / 换音色后可调）
++ (void)clearSynthesisCache;
 
 // 声音复刻：把一段参考音频（本地文件路径）上传 OSS → 调 customization → 回调 voice_id
 - (void)cloneVoiceWithName:(NSString*)name

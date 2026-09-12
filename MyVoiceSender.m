@@ -87,6 +87,7 @@
     }
 
     MVLog(@"合成中 talker=%@ mode=%ld len=%lu", peer, (long)MVEngineMode(), (unsigned long)text.length);
+    NSTimeInterval tSynth = [[NSDate date] timeIntervalSince1970];   // ★ 2.2.7 发送延迟打点
     [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"正在合成（发给 %@）…", peer]];
 
     [engine synthesizeText:text voiceID:vid completion:^(NSData *pcm, NSError *err){
@@ -101,6 +102,12 @@
                 [NSString stringWithFormat:@"❌ 合成失败，未装填：%@", why]]; });
             return;
         }
+
+        // ★ 2.2.7：点「发送」到拿到 PCM 的真实耗时。
+        //   命中预合成缓存时这一行会接近 0ms —— 那就是"发送变快"的直接证据。
+        MVLog(@"[perf] 点发送 → 拿到 PCM 共 %ldms（音频 %.2fs）",
+              (long)(([[NSDate date] timeIntervalSince1970] - tSynth) * 1000),
+              pcm.length / 32000.0);
 
         // 装填进录音管线（内部按管线采样率自适应重采样）
         NSUInteger ms = [MyVoiceRecorder feedPCM:pcm srcRate:MV_WECHAT_SR];

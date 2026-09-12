@@ -392,19 +392,25 @@ static OSStatus MV_AudioQueueNewInputWithDispatchQueue(AudioQueueRef *outAQ,
           (unsigned long)feed.length, (unsigned long)ms, srcRate, (unsigned long)pcm.length);
     // 诊断落盘（只保留最后一次）：把**真正喂进录音管线**的 16kHz PCM 存成 wav。
     // 目的：若还有"卡/变调"，可直接拖出来听 + 量，不必靠猜。
-    // 位置在信号量之外、且不在音频回调线程上，开销可忽略。
+    // ★ 2.2.7：打包仍在调用线程（纯 memcpy，微秒级），但**写盘挪到后台队列** ——
+    //   这段代码就在"点发送"的关键路径上，往里写 100~500KB 会凭空多出十几毫秒。
     @try {
-        NSString *lp = MVLogFilePath();
-        NSString *dir = lp.length ? [lp stringByDeletingLastPathComponent]
-                                  : [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
         NSData *wav = MVWav16kFromPCM(feed);
         if (wav) {
+            NSString *lp = MVLogFilePath();
+            NSString *dir = lp.length ? [lp stringByDeletingLastPathComponent]
+                                      : [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
             NSString *dp = [dir stringByAppendingPathComponent:@"MyVoice_last.wav"];
-            if ([wav writeToFile:dp atomically:NO])
-                MVLog(@"[rec] 诊断 wav 已写出：%@（%.2fs / %lu 字节）",
-                      dp, ms / 1000.0, (unsigned long)wav.length);
+            double secs = ms / 1000.0;
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                @try {
+                    if ([wav writeToFile:dp atomically:NO])
+                        MVLog(@"[rec] 诊断 wav 已写出：%@（%.2fs / %lu 字节）",
+                              dp, secs, (unsigned long)wav.length);
+                } @catch (NSException *e) { MVLog(@"[rec] 诊断 wav 写出异常 %@", e.reason); }
+            });
         }
-    } @catch (NSException *e) { MVLog(@"[rec] 诊断 wav 写出异常 %@", e.reason); }
+    } @catch (NSException *e) { MVLog(@"[rec] 诊断 wav 打包异常 %@", e.reason); }
 
     return ms;
 }

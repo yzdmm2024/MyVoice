@@ -4,6 +4,7 @@
 #import "MyVoiceManager.h"
 #import "MyVoiceResolver.h"
 #import "MyVoiceCloneController.h"
+#import "MyVoiceCloud.h"
 #import <UIKit/UIKit.h>
 
 @interface MyVoicePanel () <UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate>
@@ -55,6 +56,9 @@
 - (void)show {
     if (![NSThread isMainThread]) { MVOnMain(^{ [self show]; }); return; }
     if (self.fab) return;
+
+    // ★ 2.2.7：提前把 DNS + TLS 建好（实测首次合成 0.89s 里约 0.3~0.4s 是握手）
+    [[MyVoiceCloud shared] prewarmConnection];
     UIWindow *w = [MyVoiceResolver anyWindow];
     if (!w) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [self show]; }); return; }
 
@@ -138,6 +142,13 @@
     self.textView.backgroundColor = [UIColor systemBackgroundColor];
     self.textView.textContainerInset = UIEdgeInsetsMake(8, 6, 8, 6);
     [self.homeView addSubview:self.textView];
+
+    // ★ 2.2.7：文字一改就（防抖后）后台预合成，点「发送」时命中缓存 → 合成耗时归零。
+    //   用通知而不是 delegate：面板里没人占 textView.delegate，通知零侵入。
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(onTextViewChanged:)
+                                                 name:UITextViewTextDidChangeNotification
+                                               object:self.textView];
 
     // 当前音色选择条（仿截图入口）
     self.voiceSelectBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -470,6 +481,26 @@
     if (vid.length) return vid;
     return (MVTTSProvider() == 1) ? MVQwenVoice() : MVCurrentVoiceID();
 }
+
+#pragma mark - ★ 2.2.7 预合成（消除发送延迟里的合成等待）
+
+- (void)onTextViewChanged:(NSNotification*)n {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(prewarmNow) object:nil];
+    [self performSelector:@selector(prewarmNow) withObject:nil afterDelay:0.35];
+}
+
+- (void)prewarmNow {
+    NSString *text = [self.textView.text stringByTrimmingCharactersInSet:
+                      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!text.length || text.length > 300) return;
+    [[MyVoiceCloud shared] prewarmText:text voiceID:[self resolvedVoiceID]];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+#pragma mark - 发送
 
 - (void)onSend {
     NSString *text = [self.textView.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];

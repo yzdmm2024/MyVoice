@@ -79,14 +79,133 @@ static NSError* MVErr(NSString *msg) {
     }] resume];
 }
 
+#pragma mark - ★ 2.2.7 合成缓存（消除「点发送后还要等合成」那段延迟）
+
+// 真机实测：一次 11 字的合成，从发出请求到拿到 PCM 用掉 0.89s
+// （DNS + TLS 握手 + 服务端生成 + 下载 wav + 解码）。
+// 这段耗时完全发生在"用户已经点了发送"之后，是纯等待。
+// 做法：把 PCM 按【服务商|模型|音色|语气|语速|文字】缓存起来，
+//   面板里文字一改就在后台预合成 → 用户点「发送」时直接命中，合成耗时归零。
+// 注意：说话人/语速/语气任一变化都会换 key，绝不会串音色。
+static NSMutableDictionary *gMVTTSCache = nil;      // key -> NSData(16k 单声道 PCM)
+static NSMutableArray      *gMVTTSCacheKeys = nil;   // 简易 LRU 顺序（末尾最新）
+
+static NSString* MVTTSCacheKey(NSString *text, NSString *voiceID) {
+    if (!text.length) return nil;
+    if (MVTTSProvider() == 1) {
+        return [NSString stringWithFormat:@"q|%@|%@|%@|%.2f|%@",
+                MVQwenModel(), (voiceID.length ? voiceID : MVQwenVoice()),
+                MVQwenEmotion(), MVQwenSpeed(), text];
+    }
+    return [NSString stringWithFormat:@"c|%@|%@|%@",
+            MVCurrentModel(), (voiceID.length ? voiceID : @""), text];
+}
+
+static NSData* MVTTSCacheGet(NSString *key) {
+    if (!key.length) return nil;
+    @synchronized(@"mv-tts-cache") {
+        NSData *d = gMVTTSCache[key];
+        if (d.length) { [gMVTTSCacheKeys removeObject:key]; [gMVTTSCacheKeys addObject:key]; }
+        return d;
+    }
+}
+
+static void MVTTSCachePut(NSString *key, NSData *pcm) {
+    if (!key.length || !pcm.length) return;
+    @synchronized(@"mv-tts-cache") {
+        if (!gMVTTSCache) { gMVTTSCache = [NSMutableDictionary dictionary]; gMVTTSCacheKeys = [NSMutableArray array]; }
+        gMVTTSCache[key] = pcm;
+        [gMVTTSCacheKeys removeObject:key];
+        [gMVTTSCacheKeys addObject:key];
+        while (gMVTTSCacheKeys.count > 6) {          // 每条几十~几百 KB，只留最近 6 条
+            NSString *old = gMVTTSCacheKeys.firstObject;
+            [gMVTTSCacheKeys removeObjectAtIndex:0];
+            [gMVTTSCache removeObjectForKey:old];
+        }
+    }
+}
+
++ (void)clearSynthesisCache {
+    @synchronized(@"mv-tts-cache") {
+        [gMVTTSCache removeAllObjects];
+        [gMVTTSCacheKeys removeAllObjects];
+    }
+    MVLog(@"[cache] 合成缓存已清空");
+}
+
 #pragma mark - TTS（合成）
 
 - (void)synthesizeText:(NSString*)text voiceID:(NSString*)voiceID completion:(void(^)(NSData*,NSError*))completion {
-    if (MVTTSProvider() == 1) {
-        [self synthesizeQwenText:text voiceID:voiceID completion:completion];
+    if (!completion) return;
+
+    // ① 命中预合成缓存 → 零网络、零等待
+    NSString *key = MVTTSCacheKey(text, voiceID);
+    NSData *hit = MVTTSCacheGet(key);
+    if (hit.length) {
+        MVLog(@"[cache] ✅ 命中预合成缓存（%lu 字节 ≈ %.2fs）→ 合成耗时归零",
+              (unsigned long)hit.length, hit.length / 32000.0);
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ completion(hit, nil); });
         return;
     }
-    [self synthesizeCosyText:text voiceID:voiceID completion:completion];
+
+    // ② 未命中 → 真实请求；成功后顺手入缓存（同一条文字再发就是秒发）
+    void (^wrap)(NSData*, NSError*) = ^(NSData *pcm, NSError *e){
+        if (pcm.length && !e) MVTTSCachePut(key, pcm);
+        completion(pcm, e);
+    };
+    if (MVTTSProvider() == 1) {
+        [self synthesizeQwenText:text voiceID:voiceID completion:wrap];
+        return;
+    }
+    [self synthesizeCosyText:text voiceID:voiceID completion:wrap];
+}
+
+#pragma mark - ★ 2.2.7 预合成 / 连接预热
+
+- (void)prewarmText:(NSString*)text voiceID:(NSString*)voiceID {
+    if (!text.length || text.length > 300) return;
+    if (MVEngineMode() != 1) return;                       // 离线引擎不吃网络，预合成没意义
+    if (!MVAPIKey().length)  return;                        // 没配 Key：交给发送路径去明确报错
+    if (MVTTSProvider() == 0 && !(voiceID.length ? voiceID : MVCurrentVoiceID()).length) return;
+    if (MVTTSCacheGet(MVTTSCacheKey(text, voiceID)).length) return;   // 已经缓存过
+
+    MVLog(@"[prewarm] 后台预合成 %lu 字…（不影响发送，只为点「发送」时零等待）",
+          (unsigned long)text.length);
+    [self synthesizeText:text voiceID:voiceID completion:^(NSData *pcm, NSError *err){
+        if (pcm.length) MVLog(@"[prewarm] ✅ 预合成就绪（%lu 字节 ≈ %.2fs）",
+                              (unsigned long)pcm.length, pcm.length / 32000.0);
+        else            MVLog(@"[prewarm] 预合成未成功（不影响正常发送）：%@",
+                              err.localizedDescription ?: @"未知");
+    }];
+}
+
+// 只建立 TCP+TLS，不做真实合成（用"参数不完整"的旧接口：鉴权在参数校验前执行 → 400，
+// 不消耗额度、无副作用，但连接与 DNS 已经热了）。
+- (void)prewarmConnection {
+    NSString *apiKey = MVAPIKey();
+    if (!apiKey.length) return;
+    static NSTimeInterval lastAt = 0;
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (now - lastAt < 300) return;                        // 5 分钟内只暖一次
+    lastAt = now;
+
+    // ★ 必须与真正合成用的 host 一致，否则连接复用不起来
+    NSString *host = (MVTTSProvider() == 1) ? @"https://dashscope.aliyuncs.com/api/v1" : [self maasHost];
+    NSString *url = [host stringByAppendingString:@"/services/audio/tts/customization"];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
+    req.HTTPMethod = @"POST";
+    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    [req setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+    req.HTTPBody = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];
+    req.timeoutInterval = 10;
+    NSTimeInterval t0 = [[NSDate date] timeIntervalSince1970];
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req
+        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e){
+        MVLog(@"[prewarm] 连接预热完成 %ldms（%@）—— 之后的合成省掉握手",
+              (long)(([[NSDate date] timeIntervalSince1970] - t0) * 1000),
+              e ? e.localizedDescription
+                : [NSString stringWithFormat:@"HTTP %ld", (long)[(NSHTTPURLResponse*)r statusCode]]);
+    }] resume];
 }
 
 // 千问 Qwen-TTS（预置音色，无需克隆）：
@@ -127,9 +246,12 @@ static NSError* MVErr(NSString *msg) {
     req.timeoutInterval = 60;
 
     MVLog(@"[qwen] TTS 请求 model=%@ voice=%@ textLen=%lu", model, voice, (unsigned long)text.length);
+    NSTimeInterval tReq = [[NSDate date] timeIntervalSince1970];      // ★ 2.2.7 耗时打点
     NSURLSession *s = [NSURLSession sharedSession];
     [[s dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e){
         if (e) { MVLog(@"[qwen] TTS 网络错误 %@", e); completion(nil, e); return; }
+        MVLog(@"[perf] 合成网络 %ldms（DNS + TLS + 服务端生成 + 下载）",
+              (long)(([[NSDate date] timeIntervalSince1970] - tReq) * 1000));
         NSInteger code = [(NSHTTPURLResponse*)r statusCode];
         if (code != 200) {
             NSString *msg = [[NSString alloc] initWithData:d?:[NSData data] encoding:NSUTF8StringEncoding];
@@ -168,8 +290,12 @@ static NSError* MVErr(NSString *msg) {
 }
 
 - (void)finishQwenWav:(NSData*)wav completion:(void(^)(NSData*,NSError*))completion {
+    NSTimeInterval tDec = [[NSDate date] timeIntervalSince1970];
     NSData *pcm = [self pcmFromWavData:wav];
     if (!pcm) { completion(nil, MVErr(@"音频解码失败（非 wav？）")); return; }
+    MVLog(@"[perf] 解码 %ldms（wav %lu → 16k 单声道 %lu 字节 ≈ %.2fs）",
+          (long)(([[NSDate date] timeIntervalSince1970] - tDec) * 1000),
+          (unsigned long)wav.length, (unsigned long)pcm.length, pcm.length / 32000.0);
     MVLog(@"[qwen] TTS 解码完成 %lu bytes PCM", (unsigned long)pcm.length);
     completion(pcm, nil);
 }

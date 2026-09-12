@@ -50,7 +50,7 @@
 
 %ctor {
     @autoreleasepool {
-        MVLog(@"载入 我的语音 v2.2.6（wav 解码改为自研 RIFF 解析＋线性重采样：根治卡顿/变调；新增节奏诊断）");
+        MVLog(@"载入 我的语音 v2.2.7（发送提速：文字改动即后台预合成＋命中缓存零等待、连接预热、perf 分段耗时）");
         MVLog(@"日志文件：%@", MVLogFilePath() ?: @"(不可写，只能用 syslog)");
         [[MyVoiceManager shared] setup];
 
