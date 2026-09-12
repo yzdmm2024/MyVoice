@@ -17,25 +17,34 @@
 %hook BaseMsgContentViewController
 
 - (void)viewDidAppear:(BOOL)animated {
-    %orig;
+    // ★ 2.2.9：抓取必须放在 %orig **之前**。
+    //   微信在启动/切页时会在 viewDidAppear 内部自我销毁旧 VC，%orig 返回后 self
+    //   就可能已经 dealloc —— 之后再碰 self 就是 use-after-free。
     [MyVoiceResolver captureFromChatVC:self];
-    // 刚 appear 时 contact 可能还没挂上，0.8s 后再抓一次更稳
+    %orig;
+    // 刚 appear 时 contact 可能还没挂上，0.8s 后再补抓一次更稳。
+    // ★ 这里绝不能在 block 里捕获 self！0.8s 后它可能已被释放，而
+    //   object_getClass(野指针) 会直接 SIGTRAP —— 2.2.8 的闪退就死在这一帧：
+    //     isChatVC: ← talkerFromChatVC: ← captureFromChatVC: ← 主队列 block
+    //   （SIGTRAP 不是 NSException，@try 抓不住，只能从源头不持有。）
+    //   改走不持有任何对象的入口：到时重新从「活着的 VC 树」里取聊天页。
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        [MyVoiceResolver captureFromChatVC:self];
+        [MyVoiceResolver captureFromLatestChatVC];
     });
 }
 
 // 按住说话：返回值必须透传（编码 B24@0:8@16）
 - (BOOL)StartRecording:(id)arg {
-    BOOL r = %orig;
+    // ★ 2.2.9：先抓（self 此刻必然活着），再原样透传返回值；%orig 之后不再碰 self
     [MyVoiceResolver captureFromChatVC:self];
-    return r;
+    return %orig;
 }
 
 - (void)StopRecording {
-    %orig;
+    // ★ 2.2.9：先抓，再 %orig
     [MyVoiceResolver captureFromChatVC:self];
+    %orig;
 }
 
 %end
@@ -61,7 +70,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.2.8（修复启动闪退：宿主类触达延后到微信启动完成；UI 紧凑化＋修字体重叠）");
+        MVLog(@"载入 我的语音 v2.2.9（修复运行期闪退：VC hook 改为不持有对象＋指针闸门）");
         MVLog(@"日志文件：%@", MVLogFilePath() ?: @"(不可写，只能用 syslog)");
     }
 

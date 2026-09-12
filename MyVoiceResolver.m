@@ -187,11 +187,46 @@ static NSTimeInterval _mvCapturedAt = 0; // 捕获时间（30 分钟内有效）
     return nil;
 }
 
+// ★ 2.2.9：把 id 交给 object_getClass 之前的最后一道闸门。
+//   为什么必须有：object_getClass 对「已释放且内存已被复用」的对象会在 libobjc 的
+//   _objc_opt_class 里触发断言 → SIGTRAP(EXC_BREAKPOINT)。这**不是** NSException，
+//   @try/@catch 完全抓不住，进程直接死 —— 2.2.8 的闪退栈顶正是 object_getClass。
+//   这里做零成本粗筛：未按 8 字节对齐 / isa 为空或未对齐 的指针直接否掉；
+//   tagged pointer（NSNumber/NSDate 等）永远是合法对象，直接放行。
+static BOOL MVLooksLikeObject(id o) {
+    if (!o) return NO;
+    uintptr_t p = (uintptr_t)o;
+    if (p & 0x7UL) return NO;                    // 未按指针宽度对齐 → 绝不可能是对象
+    if (p & (1UL << 63)) return YES;             // tagged pointer → 合法
+    uintptr_t isa = *(volatile uintptr_t *)p;    // 直接读 isa，绕开 objc 的断言路径
+    if (isa == 0) return NO;
+    if (isa & 0x7UL) return NO;                  // isa 未对齐 → 内存已被复用写脏
+    return YES;
+}
+
 // 判定「这个 VC 是不是聊天页」
 + (BOOL)isChatVC:(id)vc {
-    if (!vc) return NO;
-    NSString *cn = NSStringFromClass(object_getClass(vc));
+    if (!MVLooksLikeObject(vc)) return NO;
+    Class cls = object_getClass(vc);
+    if (!cls) return NO;
+    NSString *cn = NSStringFromClass(cls);
+    if (![cn isKindOfClass:[NSString class]] || !cn.length) return NO;
     return [cn rangeOfString:@"MsgContent"].location != NSNotFound;
+}
+
+// ★ 2.2.9：延迟补抓入口 —— **不持有任何外部对象**。
+//   起因：2.2.8 在 -viewDidAppear: 里写了
+//       dispatch_after(0.8s, ^{ [MyVoiceResolver captureFromChatVC:self]; });
+//   而微信启动/切页时 viewDidAppear 内部会自我销毁旧 VC，0.8s 后 self 已 dealloc，
+//   object_getClass(野指针) → SIGTRAP。改走这里：到时重新遍历活着的 VC 树，永不碰失效指针。
++ (void)captureFromLatestChatVC {
+    NSArray *vcs = nil;
+    @try { vcs = [self allViewControllers]; } @catch (NSException *e) { return; }
+    for (UIViewController *vc in vcs) {
+        if (![self isChatVC:vc]) continue;
+        [self captureFromChatVC:vc];
+        return;                                  // 只抓最靠上的一个聊天页
+    }
 }
 
 + (NSString*)talkerFromChatVC:(id)vc {

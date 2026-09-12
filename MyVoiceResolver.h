@@ -38,6 +38,10 @@
 + (NSString*)talkerFromChatVC:(id)vc;
 // 供 hook 调用：解析并记住（进程内缓存 + 落盘）
 + (void)captureFromChatVC:(id)vc;
+// ★ 2.2.9 延迟补抓专用：**不持有任何外部对象**。hook 里 dispatch_after 之后绝不能再碰
+//   当时捕获的 VC —— 那时它可能已 dealloc，而 object_getClass(野指针) 会直接 SIGTRAP
+//   （不是 NSException，@try 抓不住）。这里改为到时重新从「活着的 VC 树」取聊天页。
++ (void)captureFromLatestChatVC;
 // 上次捕获到的会话（进程内 → 落盘）
 + (NSString*)capturedTalker;
 + (NSString*)sanitize:(NSString*)s;
