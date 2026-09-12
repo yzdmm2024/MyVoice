@@ -57,6 +57,9 @@
 - (void)sendText:(NSString*)text toTalker:(NSString*)talker voiceID:(NSString*)voiceID {
     if (!text.length) { MVLog(@"send 取消：文字为空"); return; }
 
+    // 发送前先停掉任何正在进行的预览朗读，避免「预览外放」和「录音注入」同时发声造成重叠
+    [MyVoiceEngine stopPreview];
+
     NSString *peer = (talker.length ? talker : [MyVoiceResolver currentTalker]);
     if (!peer.length) {
         MVLog(@"send 取消：未识别聊天对象（请先打开该聊天页）");
@@ -107,14 +110,120 @@
         }
 
         double rate = [MyVoiceRecorder pipelineRate];
-        MVLog(@"[send] ✅ 已装填 %.1fs 音频（管线采样率 %@）— 等待用户按住说话",
+        MVLog(@"[send] ✅ 已装填 %.1fs 音频（管线采样率 %@）— 等待发送",
               ms / 1000.0, rate > 0 ? [NSString stringWithFormat:@"%.0fHz", rate] : @"待定(16k 假设)");
 
         MVOnMain(^{
-            [[MyVoiceManager shared] toast:[NSString stringWithFormat:
-                @"✅ 语音已就绪（%.1f 秒）\n请按住「按住 说话」，松开即发送", ms / 1000.0]];
+            double dur = ms / 1000.0;
+            if (MVAutoSend()) {
+                // 自动发送：装填完成后自动模拟「按住说话」，到 TTS 时长后自动松手
+                [[MyVoiceManager shared] toast:[NSString stringWithFormat:
+                    @"✅ 语音已就绪（%.1f 秒）\n正在自动发送…", dur]];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    [self autoStartTalkForDuration:dur];
+                });
+            } else {
+                [[MyVoiceManager shared] toast:[NSString stringWithFormat:
+                    @"✅ 语音已就绪（%.1f 秒）\n请按住「按住 说话」，松开即发送", dur]];
+            }
         });
     }];
+}
+
+#pragma mark - 自动发送（模拟按住说话 → 松手，免去手动按住）
+
+// 防止并发多次自动会话互相干扰
+static BOOL g_mvAutoActive = NO;
+
+- (void)autoStartTalkForDuration:(double)seconds {
+    if (!MVAutoSend()) return;
+    if (g_mvAutoActive) { MVLog(@"[auto] 已有自动会话进行中，跳过"); return; }
+    g_mvAutoActive = YES;
+
+    MVOnMain(^{
+        @try {
+            UIButton *talk = [self findTalkButton];
+            if (!talk) { MVLog(@"[auto] 未找到「按住说话」按钮，回退手动"); [self fallbackManualToast]; return; }
+
+            // ① 模拟按下（开始录音）
+            [talk sendActionsForControlEvents:UIControlEventTouchDown];
+            [self fireLongPressOn:talk toState:UIGestureRecognizerStateBegan];
+
+            // ② 自检：600ms 内录音是否被劫持接管（看喂入字节数）
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                if ([MyVoiceRecorder fedBytes] == 0) {
+                    // 没接管 → 撤销并回退手动提示
+                    MVLog(@"[auto] 600ms 内录音未被接管，回退手动");
+                    [self fireLongPressOn:talk toState:UIGestureRecognizerStateEnded];
+                    [talk sendActionsForControlEvents:UIControlEventTouchUpInside];
+                    [MyVoiceRecorder cancelFeed];
+                    g_mvAutoActive = NO;
+                    [self fallbackManualToast];
+                    return;
+                }
+                // ③ 到时松手发送（TTS 时长 + 0.35s 收尾静音）
+                double hold = MAX(0.4, seconds + 0.35);
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(hold * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    [self fireLongPressOn:talk toState:UIGestureRecognizerStateEnded];
+                    [talk sendActionsForControlEvents:UIControlEventTouchUpInside];
+                    [talk sendActionsForControlEvents:UIControlEventTouchUpOutside];
+                    g_mvAutoActive = NO;
+                    MVLog(@"[auto] 已自动松手，等待微信完成发送");
+                });
+            });
+        } @catch (NSException *e) {
+            MVLog(@"[auto] 异常 %@，回退手动", e.reason);
+            [MyVoiceRecorder cancelFeed];
+            g_mvAutoActive = NO;
+            [self fallbackManualToast];
+        }
+    });
+}
+
+// 在聊天页视图树里找标题含「说话/按住」的 UIButton（即微信的录音键）
+- (UIButton*)findTalkButton {
+    @try {
+        UIViewController *chatVC = nil;
+        for (UIViewController *vc in [MyVoiceResolver allViewControllers]) {
+            if ([MyVoiceResolver isChatVC:vc]) { chatVC = vc; break; }
+        }
+        UIView *root = chatVC ? chatVC.view : [MyVoiceResolver anyWindow];
+        return (UIButton*)[self findTalkButtonIn:root depth:0];
+    } @catch (NSException *e) { return nil; }
+}
+
+- (UIView*)findTalkButtonIn:(UIView*)view depth:(int)depth {
+    if (!view || depth > 12) return nil;
+    for (UIView *sub in view.subviews) {
+        if ([sub isKindOfClass:[UIButton class]]) {
+            UIButton *b = (UIButton*)sub;
+            NSString *t = [b titleForState:UIControlStateNormal];
+            if (t.length && ([t containsString:@"说话"] || [t containsString:@"按住"])) return b;
+            NSAttributedString *at = [b attributedTitleForState:UIControlStateNormal];
+            if (at && [[at string] containsString:@"说话"]) return b;
+        }
+        UIView *r = [self findTalkButtonIn:sub depth:depth + 1];
+        if (r) return r;
+    }
+    return nil;
+}
+
+// 触发/结束按钮上的长按手势（部分微信版本用 UILongPressGestureRecognizer 接管录音）
+- (void)fireLongPressOn:(UIButton*)btn toState:(UIGestureRecognizerState)st {
+    @try {
+        for (UIGestureRecognizer *g in btn.gestureRecognizers) {
+            if ([g isKindOfClass:[UILongPressGestureRecognizer class]]) {
+                g.state = st;
+            }
+        }
+    } @catch (NSException *e) {}
+}
+
+- (void)fallbackManualToast {
+    [[MyVoiceManager shared] toast:@"自动发送未生效，请手动按住「按住 说话」后松开"];
 }
 
 @end
