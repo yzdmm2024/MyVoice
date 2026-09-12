@@ -44,7 +44,7 @@
 + (instancetype)shared { static id s; static dispatch_once_t t; dispatch_once(&t,^{ s=[[self alloc] init]; }); return s; }
 
 #define MV_PANEL_W 320.0
-#define MV_PANEL_H 420.0
+#define MV_PANEL_H 380.0   // ★ 2.2.8：420→380。原高度下主视图内容只到 y=316，底部空 104pt
 
 #pragma mark - 初始化/显示
 
@@ -136,7 +136,7 @@
     [self.homeView addSubview:self.dragBar];
 
     // 文字输入
-    self.textView = [[UITextView alloc] initWithFrame:CGRectMake(12, 42, MV_PANEL_W - 24, 80)];
+    self.textView = [[UITextView alloc] initWithFrame:CGRectMake(12, 40, MV_PANEL_W - 24, 74)];
     self.textView.layer.cornerRadius = 10;
     self.textView.font = [UIFont systemFontOfSize:15];
     self.textView.backgroundColor = [UIColor systemBackgroundColor];
@@ -152,7 +152,10 @@
 
     // 当前音色选择条（仿截图入口）
     self.voiceSelectBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.voiceSelectBtn.frame = CGRectMake(12, 130, MV_PANEL_W - 24, 42);
+    self.voiceSelectBtn.frame = CGRectMake(12, 120, MV_PANEL_W - 24, 40);
+    // ★ 2.2.8：音色名（如「千问 Cherry·温柔女声」）过长时不再溢出/挤压，自动缩字号兜底
+    self.voiceSelectBtn.titleLabel.adjustsFontSizeToFitWidth = YES;
+    self.voiceSelectBtn.titleLabel.minimumScaleFactor = 0.72;
     self.voiceSelectBtn.backgroundColor = [UIColor systemBackgroundColor];
     self.voiceSelectBtn.layer.cornerRadius = 10;
     self.voiceSelectBtn.titleLabel.font = [UIFont systemFontOfSize:14];
@@ -166,7 +169,7 @@
     [self.sendBtn setTitle:@"① 合成语音" forState:UIControlStateNormal];
     self.sendBtn.backgroundColor = [UIColor systemBlueColor];
     [self.sendBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    self.sendBtn.frame = CGRectMake(12, 182, 130, 42);
+    self.sendBtn.frame = CGRectMake(12, 166, 130, 42);
     self.sendBtn.layer.cornerRadius = 10;
     self.sendBtn.titleLabel.font = [UIFont systemFontOfSize:15];
     [self.sendBtn addTarget:self action:@selector(onSend) forControlEvents:UIControlEventTouchUpInside];
@@ -174,7 +177,7 @@
 
     self.cloneBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.cloneBtn setTitle:@"音色管理" forState:UIControlStateNormal];
-    self.cloneBtn.frame = CGRectMake(156, 182, MV_PANEL_W - 168, 42);
+    self.cloneBtn.frame = CGRectMake(156, 166, MV_PANEL_W - 168, 42);
     self.cloneBtn.layer.cornerRadius = 10;
     self.cloneBtn.backgroundColor = [UIColor tertiarySystemBackgroundColor];
     self.cloneBtn.titleLabel.font = [UIFont systemFontOfSize:15];
@@ -183,7 +186,7 @@
 
     self.previewBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.previewBtn setTitle:@"预览" forState:UIControlStateNormal];
-    self.previewBtn.frame = CGRectMake(12, 232, MV_PANEL_W - 24, 40);
+    self.previewBtn.frame = CGRectMake(12, 216, MV_PANEL_W - 24, 40);
     self.previewBtn.layer.cornerRadius = 10;
     self.previewBtn.backgroundColor = [UIColor tertiarySystemBackgroundColor];
     self.previewBtn.titleLabel.font = [UIFont systemFontOfSize:15];
@@ -191,7 +194,7 @@
     [self.homeView addSubview:self.previewBtn];
 
     // 会话状态
-    self.sessionLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 282, MV_PANEL_W - 24, 34)];
+    self.sessionLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 264, MV_PANEL_W - 24, 40)];
     self.sessionLabel.font = [UIFont systemFontOfSize:11];
     self.sessionLabel.numberOfLines = 2;
     self.sessionLabel.adjustsFontSizeToFitWidth = YES;
@@ -202,7 +205,7 @@
 
     self.closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.closeBtn setTitle:@"关闭" forState:UIControlStateNormal];
-    self.closeBtn.frame = CGRectMake(MV_PANEL_W - 84, MV_PANEL_H - 48, 72, 36);
+    self.closeBtn.frame = CGRectMake(MV_PANEL_W - 84, MV_PANEL_H - 52, 72, 36);
     self.closeBtn.backgroundColor = [UIColor tertiarySystemBackgroundColor];
     self.closeBtn.layer.cornerRadius = 9;
     self.closeBtn.titleLabel.font = [UIFont systemFontOfSize:15];
@@ -236,37 +239,43 @@
 
     // 标题栏
     UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, MV_PANEL_W, 44)];
-    UILabel *pt = [[UILabel alloc] initWithFrame:CGRectMake(14, 10, 220, 22)];
-    pt.text = @"选择音色（千问48+原440）";
+    // ★ 2.2.8 修字体重叠：原来标题宽 220（x14→234）而「返回」按钮在 x140→220，
+    //   两个控件完全压在一起。现改为：标题收窄到按钮左侧 + 按钮右对齐紧凑排列。
+    //   标题里的「（千问48+原440）」移到下方 sectionLabel（那里本来就写着音色数），
+    //   避免在 320pt 宽的面板里跟两个按钮抢位置。
+    UILabel *pt = [[UILabel alloc] initWithFrame:CGRectMake(12, 11, MV_PANEL_W - 158, 22)];
+    pt.text = @"选择音色";
     pt.font = [UIFont boldSystemFontOfSize:15];
     pt.textColor = [UIColor labelColor];
+    pt.adjustsFontSizeToFitWidth = YES;
+    pt.minimumScaleFactor = 0.8;
     [header addSubview:pt];
 
     self.reloadBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.reloadBtn setTitle:@"重新加载" forState:UIControlStateNormal];
-    self.reloadBtn.frame = CGRectMake(MV_PANEL_W - 90, 8, 82, 28);
+    self.reloadBtn.frame = CGRectMake(MV_PANEL_W - 68, 8, 56, 28);   // ★ 2.2.8 右对齐 252→308
     self.reloadBtn.titleLabel.font = [UIFont systemFontOfSize:13];
     [self.reloadBtn addTarget:self action:@selector(onReloadVoices) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:self.reloadBtn];
 
     self.pickerBackBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.pickerBackBtn setTitle:@"返回" forState:UIControlStateNormal];
-    self.pickerBackBtn.frame = CGRectMake(MV_PANEL_W - 180, 8, 80, 28);
+    self.pickerBackBtn.frame = CGRectMake(MV_PANEL_W - 132, 8, 56, 28);   // ★ 2.2.8 188→244
     self.pickerBackBtn.titleLabel.font = [UIFont systemFontOfSize:13];
     [self.pickerBackBtn addTarget:self action:@selector(hidePicker) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:self.pickerBackBtn];
 
     [self.pickerView addSubview:header];
 
-    CGFloat y = 50;
+    CGFloat y = 48;   // ★ 2.2.8
 
     // 搜索框
-    self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(8, y, MV_PANEL_W - 16, 36)];
+    self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(8, y, MV_PANEL_W - 16, 34)];
     self.searchBar.placeholder = @"搜索音色（中文名/ID，如 Cherry…";
     self.searchBar.searchBarStyle = UISearchBarStyleMinimal;
     self.searchBar.delegate = self;
     [self.pickerView addSubview:self.searchBar];
-    y += 42;
+    y += 38;
 
     // 语速
     UILabel *sl = [[UILabel alloc] initWithFrame:CGRectMake(14, y, 36, 22)];
@@ -288,7 +297,7 @@
     self.speedLabel.textColor = [UIColor labelColor];
     [self updateSpeedLabel];
     [self.pickerView addSubview:self.speedLabel];
-    y += 30;
+    y += 28;
 
     // 语气
     UILabel *el = [[UILabel alloc] initWithFrame:CGRectMake(14, y, 36, 22)];
@@ -302,7 +311,7 @@
     self.emotionSeg.selectedSegmentIndex = [self emotionIndex:MVQwenEmotion()];
     [self.emotionSeg addTarget:self action:@selector(onEmotionChanged:) forControlEvents:UIControlEventValueChanged];
     [self.pickerView addSubview:self.emotionSeg];
-    y += 32;
+    y += 30;
 
     // 说明
     self.pickerHintLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, y, MV_PANEL_W - 28, 18)];
@@ -310,7 +319,7 @@
     self.pickerHintLabel.font = [UIFont systemFontOfSize:11];
     self.pickerHintLabel.textColor = [UIColor tertiaryLabelColor];
     [self.pickerView addSubview:self.pickerHintLabel];
-    y += 24;
+    y += 20;
 
     // 分组标题
     self.sectionLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, y, MV_PANEL_W - 28, 22)];
@@ -318,10 +327,10 @@
     self.sectionLabel.font = [UIFont boldSystemFontOfSize:14];
     self.sectionLabel.textColor = [UIColor labelColor];
     [self.pickerView addSubview:self.sectionLabel];
-    y += 26;
+    y += 24;
 
     // 音色列表
-    self.voiceTable = [[UITableView alloc] initWithFrame:CGRectMake(12, y, MV_PANEL_W - 24, MV_PANEL_H - y - 12) style:UITableViewStylePlain];
+    self.voiceTable = [[UITableView alloc] initWithFrame:CGRectMake(12, y, MV_PANEL_W - 24, MV_PANEL_H - y - 10) style:UITableViewStylePlain];
     self.voiceTable.backgroundColor = [UIColor clearColor];
     self.voiceTable.dataSource = self;
     self.voiceTable.delegate = self;

@@ -346,9 +346,40 @@ static inline void MVOnMain(dispatch_block_t blk) {
 
 // ---- 微信内部服务/工具（2.0.17 直发链路用）----
 
+// ============================================================
+// ★★★ 2.2.8 关键修复：宿主就绪探针 ★★★
+//
+// 【崩溃现场】iOS 16.6 / 微信 8.0.75.33 / MyVoice 2.2.7，主线程 SIGSEGV：
+//   EXC_BAD_ACCESS (KERN_INVALID_ADDRESS at 0x90)，selector = sharedInstance
+//   dyld → MyVoice.dylib initializer(offset 0x80F0) → -[MyVoiceManager setup]
+//        → -[MyVoicePanel show] → -[MyVoiceResolver currentTalker]
+//        → MVService / NSClassFromString → WeChat +initialize
+//        → _dispatch_once_callout → +sharedInstance → 💥
+//
+// 【为什么会崩】本 tweak 由 RootHide 的 TweakInject 在**微信进程 dyld 初始化期**就
+//   dlopen 并执行 %ctor。那一刻微信自己的 ObjC 类尚未 realize、+initialize 还没跑。
+//   此时只要执行一次 NSClassFromString(@"MMServiceCenter")（或任何宿主类名），就会把
+//   该宿主类**强行 realize 并触发它的 +initialize**；而微信 +initialize 内部会去取
+//   尚未就绪的单例 → 拿到野指针 → 0x90 处访存 → 崩。
+//
+// 【判据】UIApplication 是系统类：UIApplicationMain 之前 +sharedApplication 恒返回 nil，
+//   且「给 nil 发消息」在 ObjC 里是安全的。所以它是唯一能安全使用的就绪探针。
+//   ⚠️ 绝不能用 NSClassFromString(宿主类) 做判定 —— 那本身就是引爆器。
+// ============================================================
+static inline BOOL MVHostReady(void) {
+    Class appCls = objc_getClass("UIApplication");
+    if (!appCls) return NO;
+    SEL s = NSSelectorFromString(@"sharedApplication");
+    if (!s || ![appCls respondsToSelector:s]) return NO;
+    id app = ((id(*)(id,SEL))objc_msgSend)((id)appCls, s);
+    return app != nil;
+}
+
 // 取微信服务实例（CMessageMgr / CContactMgr / ...）：
 // 首选 MMServiceCenter.defaultCenter → getService:<cls>，退化到 sharedInstance。
 static inline id MVService(NSString *clsName) {
+    // ★ 2.2.8：宿主未就绪时绝不 resolve 宿主类名，否则触发其 +initialize 直接崩。
+    if (!MVHostReady()) { MVLog(@"[svc] 宿主未就绪，跳过取 %@", clsName); return nil; }
     Class cls = NSClassFromString(clsName);
     if (!cls) return nil;
     @try {

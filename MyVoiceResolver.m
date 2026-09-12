@@ -4,6 +4,10 @@
 @implementation MyVoiceResolver
 
 + (Class)classWithCandidates:(NSArray<NSString*>*)names {
+    // ★ 2.2.8：这里是全项目唯一的「宿主类名批量解析」入口（BaseMsgContentViewController /
+    //   MMServiceCenter / CContactMgr ...）。宿主未就绪时解析会把宿主类强行 realize
+    //   并触发其 +initialize → 直接崩（详见 MyVoiceCommon.h 顶部长注释）。
+    if (!MVHostReady()) return nil;
     for (NSString *n in names) {
         Class c = NSClassFromString(n);
         if (c) return c;

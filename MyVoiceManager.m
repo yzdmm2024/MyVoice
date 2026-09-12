@@ -12,10 +12,45 @@
 static void MVSettingsChanged(CFNotificationCenterRef center, void *observer,
                               CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     dispatch_async(dispatch_get_main_queue(), ^{
+        // ★ 2.2.8：通知可能在宿主未就绪时到达（启动瞬间别的进程广播设置变更），
+        //   此时建面板会触达宿主类 → 崩。丢掉即可：启动完成后的 setup 会读一次最新设置。
+        if (!MVHostReady()) { MVLog(@"[setup] 宿主未就绪，忽略本次设置变更通知"); return; }
         BOOL on = MVEnabled();
         if (on) [[MyVoicePanel shared] show]; else [[MyVoicePanel shared] hide];
         MVLog(@"设置变更（跨进程），启用=%d 引擎=%ld 音色数=%lu",
               on, (long)MVEngineMode(), (unsigned long)MVVoices().count);
+    });
+}
+
+// ============================================================
+// ★ 2.2.8：由 Tweak.x 的 %ctor 延后调用（不再在 dyld 初始化期同步 setup）。
+//
+// 原来 %ctor 里直接 [[MyVoiceManager shared] setup]，而 %ctor 跑在**微信 dyld 初始化期**：
+//   setup → [MyVoicePanel show] → refreshSession → [MyVoiceResolver currentTalker]
+//         → MVService(@"CContactMgr") / NSClassFromString(宿主类) → 宿主 +initialize 💥
+//
+// 这里改成「轮询等宿主真的起来」再 setup。幂等，只会成功一次。
+// hostReady 的两个条件全部只用系统 API，安全：
+//   · MVHostReady()      = UIApplication 已创建（UIApplicationMain 跑过）
+//   · anyWindow != nil   = 有可挂载的 window（面板要 addSubview）
+// ============================================================
++ (BOOL)hostReady {
+    if (!MVHostReady()) return NO;
+    return [MyVoiceResolver anyWindow] != nil;
+}
+
++ (void)setupWhenHostReady {
+    MVOnMain(^{
+        static BOOL done = NO;
+        if (done) return;
+        if (![self hostReady]) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ [self setupWhenHostReady]; });
+            return;
+        }
+        done = YES;
+        [[self shared] setup];
+        MVLog(@"[setup] 宿主已就绪，面板装配完成");
     });
 }
 
