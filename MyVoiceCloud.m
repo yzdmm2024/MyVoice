@@ -481,6 +481,124 @@ static inline uint32_t MVrd32(const uint8_t *p) {
     return pcm.length ? pcm : nil;
 }
 
+#pragma mark - DashScope 临时托管（★ 2.4.0：录音复刻免 OSS）
+
+// DashScope 官方临时文件托管，两步：
+//   ① GET /api/v1/uploads?action=getPolicy&model=voice-enrollment → 拿一次性上传凭证
+//   ② multipart 直传到凭证里的 OSS host → 文件以 oss://{key} 引用
+// 复刻接口配 X-DashScope-OssResourceResolve: enable 头即可直接吃 oss:// 地址。
+// PC 端真账号实测：上传 200，create_voice 返回 voice_id —— 录音复刻从此
+// 【只需 API Key，不需要用户配置任何 OSS】。凭证 5 分钟过期，量小够用。
+- (void)uploadToDashScopeInstant:(NSData*)data fileName:(NSString*)fname
+                      completion:(void(^)(NSString *ossURL, NSError *err))completion {
+    NSString *apiKey = MVAPIKey();
+    if (!apiKey.length) { completion(nil, MVErr(@"未配置 API Key")); return; }
+    if (!fname.length) fname = @"ref.wav";
+
+    NSString *pu = @"https://dashscope.aliyuncs.com/api/v1/uploads?action=getPolicy&model=voice-enrollment";
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:pu]];
+    [req setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+    req.timeoutInterval = 30;
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e){
+        if (e) { completion(nil, e); return; }
+        NSInteger code = [(NSHTTPURLResponse*)r statusCode];
+        NSDictionary *j = [NSJSONSerialization JSONObjectWithData:d ?: [NSData data] options:0 error:nil];
+        NSDictionary *pol = [j[@"data"] isKindOfClass:[NSDictionary class]] ? j[@"data"] : nil;
+        if (code != 200 || !pol || ![pol[@"policy"] isKindOfClass:[NSString class]]) {
+            NSString *msg = [[NSString alloc] initWithData:d ?: [NSData data] encoding:NSUTF8StringEncoding];
+            MVLog(@"[instant] getPolicy 失败 %ld %@", (long)code, msg);
+            completion(nil, MVErr([NSString stringWithFormat:@"临时托管凭证获取失败 %ld：%@", (long)code, msg]));
+            return;
+        }
+        NSString *host = pol[@"upload_host"];
+        NSString *key  = [NSString stringWithFormat:@"%@/%@", pol[@"upload_dir"], fname];
+        NSString *boundary = @"mv-instant-boundary-7A3F5C";
+        NSMutableData *body = [NSMutableData data];
+        void (^field)(NSString*, NSString*) = ^(NSString *n, NSString *v){
+            [body appendData:[[NSString stringWithFormat:
+                @"--%@\r\nContent-Disposition: form-data; name=\"%@\"\r\n\r\n%@\r\n",
+                boundary, n, v] dataUsingEncoding:NSUTF8StringEncoding]];
+        };
+        field(@"policy",                 pol[@"policy"]);
+        field(@"Signature",              pol[@"signature"]);
+        field(@"key",                    key);
+        field(@"OSSAccessKeyId",         pol[@"oss_access_key_id"]);
+        field(@"success_action_status",  @"200");
+        field(@"x-oss-object-acl",       [pol[@"x_oss_object_acl"] isKindOfClass:[NSString class]] ? pol[@"x_oss_object_acl"] : @"private");
+        field(@"x-oss-forbid-overwrite", [pol[@"x_oss_forbid_overwrite"] isKindOfClass:[NSString class]] ? pol[@"x_oss_forbid_overwrite"] : @"true");
+        if ([pol[@"x_oss_server_side_encryption"] isKindOfClass:[NSString class]])
+            field(@"x-oss-server-side-encryption", pol[@"x_oss_server_side_encryption"]);
+        [body appendData:[[NSString stringWithFormat:
+            @"--%@\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%@\"\r\nContent-Type: audio/wav\r\n\r\n",
+            boundary, fname] dataUsingEncoding:NSUTF8StringEncoding]];
+        [body appendData:data];
+        [body appendData:[[NSString stringWithFormat:@"\r\n--%@--\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
+
+        NSMutableURLRequest *up = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:host]];
+        up.HTTPMethod = @"POST";
+        up.HTTPBody = body;
+        up.timeoutInterval = 120;
+        [up setValue:[NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary]
+            forHTTPHeaderField:@"Content-Type"];
+        MVLog(@"[instant] 直传 %lu 字节 → oss://%@", (unsigned long)data.length, key);
+        [[[NSURLSession sharedSession] dataTaskWithRequest:up completionHandler:^(NSData *d2, NSURLResponse *r2, NSError *e2){
+            NSInteger c2 = [(NSHTTPURLResponse*)r2 statusCode];
+            if (e2 || c2 != 200) {
+                NSString *msg = [[NSString alloc] initWithData:d2 ?: [NSData data] encoding:NSUTF8StringEncoding];
+                MVLog(@"[instant] 直传失败 %ld %@ %@", (long)c2, msg, e2);
+                completion(nil, e2 ?: MVErr([NSString stringWithFormat:@"音频托管失败 %ld %@", (long)c2, msg]));
+                return;
+            }
+            MVLog(@"[instant] ✅ 直传成功 oss://%@", key);
+            completion([NSString stringWithFormat:@"oss://%@", key], nil);
+        }] resume];
+    }] resume];
+}
+
+// 复刻注册（create_voice）：音频地址可以是公网 http(s)（用户自有 OSS）或 oss://（临时托管）
+- (void)enrollCreateVoiceWithURL:(NSString*)audioURL
+                         resolve:(BOOL)resolve
+                      completion:(void(^)(NSString *voiceID, NSError *err))completion {
+    NSString *apiKey = MVAPIKey();
+    NSString *host = [self maasHost];
+    NSString *cu = [host stringByAppendingString:@"/services/audio/tts/customization"];
+    NSDictionary *body = @{
+        @"model": @"voice-enrollment",
+        @"input": @{
+            @"action": @"create_voice",
+            @"target_model": MVCurrentModel(),
+            @"prefix": @"myvoice",
+            @"url": audioURL
+        }
+    };
+    NSData *json = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:cu]];
+    req.HTTPMethod = @"POST";
+    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    [req setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+    if (resolve) [req setValue:@"enable" forHTTPHeaderField:@"X-DashScope-OssResourceResolve"];
+    req.HTTPBody = json;
+    req.timeoutInterval = 60;
+    MVLog(@"[cloud] 复刻请求 url=%@ resolve=%d", audioURL, resolve);
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *err){
+        if (err) { completion(nil, err); return; }
+        NSInteger code = [(NSHTTPURLResponse*)r statusCode];
+        if (code != 200) {
+            NSString *msg = [[NSString alloc] initWithData:d ?: [NSData data] encoding:NSUTF8StringEncoding];
+            MVLog(@"[cloud] 复刻 HTTP %ld %@", (long)code, msg);
+            completion(nil, MVErr([NSString stringWithFormat:@"复刻失败 %ld：%@", (long)code, msg]));
+            return;
+        }
+        NSDictionary *j = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+        NSString *vid = nil;
+        if ([j[@"output"] isKindOfClass:[NSDictionary class]]) vid = j[@"output"][@"voice_id"];
+        if (!vid.length) vid = j[@"voice_id"];
+        if (!vid.length) { MVLog(@"[cloud] 复刻未返回 voice_id %@", j); completion(nil, MVErr(@"复刻未返回 voice_id")); return; }
+        MVLog(@"[cloud] ✅ 复刻成功 voice_id=%@", vid);
+        completion(vid, nil);
+    }] resume];
+}
+
 #pragma mark - OSS 上传（克隆音色用，一次性拿公网 URL）
 
 - (void)uploadToOSS:(NSData*)data objectKey:(NSString*)key contentType:(NSString*)ct completion:(void(^)(NSString* url, NSError*))completion {
@@ -533,51 +651,27 @@ static inline uint32_t MVrd32(const uint8_t *p) {
 
 - (void)cloneVoiceWithName:(NSString*)name referenceAudioPath:(NSString*)path completion:(void(^)(NSString*,NSError*))completion {
     NSString *apiKey = MVAPIKey();
-    NSString *host = [self maasHost];
     if (!apiKey.length) { completion(nil, MVErr(@"未配置 DashScope API Key")); return; }
     NSData *audio = [NSData dataWithContentsOfFile:path];
     if (audio.length == 0) { completion(nil, MVErr(@"参考音频读取失败")); return; }
 
-    NSString *key = [NSString stringWithFormat:@"myvoice/%@_%@.wav",
-                     name.length ? name : @"ref", [[NSUUID UUID] UUIDString]];
-    [self uploadToOSS:audio objectKey:key contentType:@"audio/wav" completion:^(NSString *url, NSError *e){
-        if (!url) { completion(nil, e ?: MVErr(@"OSS 上传失败")); return; }
-        // customization 端点
-        NSString *cu = [host stringByAppendingString:@"/services/audio/tts/customization"];
-        NSDictionary *body = @{
-            @"model": @"voice-enrollment",
-            @"input": @{
-                @"action": @"create_voice",
-                @"target_model": MVCurrentModel(),
-                @"prefix": @"myvoice",
-                @"url": url
-            }
-        };
-        NSData *json = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
-        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:cu]];
-        req.HTTPMethod = @"POST";
-        [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-        [req setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
-        req.HTTPBody = json;
-        req.timeoutInterval = 60;
-        MVLog(@"[cloud] 克隆请求 url=%@", url);
-        [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *err){
-            if (err) { completion(nil, err); return; }
-            NSInteger code = [(NSHTTPURLResponse*)r statusCode];
-            if (code != 200) {
-                NSString *msg = [[NSString alloc] initWithData:d?:[NSData data] encoding:NSUTF8StringEncoding];
-                MVLog(@"[cloud] 克隆 HTTP %ld %@", (long)code, msg);
-                completion(nil, MVErr([NSString stringWithFormat:@"克隆失败 %ld：%@", (long)code, msg]));
-                return;
-            }
-            NSDictionary *j = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
-            NSString *vid = nil;
-            if ([j[@"output"] isKindOfClass:[NSDictionary class]]) vid = j[@"output"][@"voice_id"];
-            if (!vid.length) vid = j[@"voice_id"];
-            if (!vid.length) { MVLog(@"[cloud] 克隆未返回 voice_id %@", j); completion(nil, MVErr(@"克隆未返回 voice_id")); return; }
-            MVLog(@"[cloud] 克隆成功 voice_id=%@", vid);
-            completion(vid, nil);
-        }] resume];
+    // ★ 2.4.0 三态：配了自有 OSS → 老路径（公网 URL）；没配 → DashScope 临时托管（免 OSS）
+    BOOL hasOSS = (MVOSSBucket().length && MVOSSHost().length && MVOSSAk().length && MVOSSSk().length);
+    if (hasOSS) {
+        NSString *key = [NSString stringWithFormat:@"myvoice/%@_%@.wav",
+                         name.length ? name : @"ref", [[NSUUID UUID] UUIDString]];
+        [self uploadToOSS:audio objectKey:key contentType:@"audio/wav" completion:^(NSString *url, NSError *e){
+            if (!url) { completion(nil, e ?: MVErr(@"OSS 上传失败")); return; }
+            [self enrollCreateVoiceWithURL:url resolve:NO completion:completion];
+        }];
+        return;
+    }
+
+    MVLog(@"[clone] 未配置 OSS，改走 DashScope 临时托管（免 OSS 复刻）");
+    NSString *fname = [NSString stringWithFormat:@"mv_%@.wav", [[NSUUID UUID] UUIDString]];
+    [self uploadToDashScopeInstant:audio fileName:fname completion:^(NSString *ossURL, NSError *e){
+        if (!ossURL) { completion(nil, e ?: MVErr(@"音频托管失败")); return; }
+        [self enrollCreateVoiceWithURL:ossURL resolve:YES completion:completion];
     }];
 }
 

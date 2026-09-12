@@ -169,24 +169,27 @@
     [self.sendBtn setTitle:@"① 合成语音" forState:UIControlStateNormal];
     self.sendBtn.backgroundColor = [UIColor systemBlueColor];
     [self.sendBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    self.sendBtn.frame = CGRectMake(12, 166, 130, 42);
+    self.sendBtn.frame = CGRectMake(12, 168, 150, 44);
     self.sendBtn.layer.cornerRadius = 10;
-    self.sendBtn.titleLabel.font = [UIFont systemFontOfSize:15];
+    self.sendBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
     [self.sendBtn addTarget:self action:@selector(onSend) forControlEvents:UIControlEventTouchUpInside];
     [self.homeView addSubview:self.sendBtn];
 
     self.cloneBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.cloneBtn setTitle:@"音色管理" forState:UIControlStateNormal];
-    self.cloneBtn.frame = CGRectMake(156, 166, MV_PANEL_W - 168, 42);
+    [self.cloneBtn setTitle:@"＋ 音色管理（录音复刻 · 文字设计）" forState:UIControlStateNormal];
+    self.cloneBtn.frame = CGRectMake(12, 220, MV_PANEL_W - 24, 44);
     self.cloneBtn.layer.cornerRadius = 10;
     self.cloneBtn.backgroundColor = [UIColor tertiarySystemBackgroundColor];
-    self.cloneBtn.titleLabel.font = [UIFont systemFontOfSize:15];
+    [self.cloneBtn setTitleColor:[UIColor systemBlueColor] forState:UIControlStateNormal];
+    self.cloneBtn.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+    self.cloneBtn.titleLabel.adjustsFontSizeToFitWidth = YES;
+    self.cloneBtn.titleLabel.minimumScaleFactor = 0.8;
     [self.cloneBtn addTarget:self action:@selector(onClone) forControlEvents:UIControlEventTouchUpInside];
     [self.homeView addSubview:self.cloneBtn];
 
     self.previewBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.previewBtn setTitle:@"预览" forState:UIControlStateNormal];
-    self.previewBtn.frame = CGRectMake(12, 216, MV_PANEL_W - 24, 40);
+    self.previewBtn.frame = CGRectMake(168, 168, MV_PANEL_W - 180, 44);
     self.previewBtn.layer.cornerRadius = 10;
     self.previewBtn.backgroundColor = [UIColor tertiarySystemBackgroundColor];
     self.previewBtn.titleLabel.font = [UIFont systemFontOfSize:15];
@@ -194,7 +197,7 @@
     [self.homeView addSubview:self.previewBtn];
 
     // 会话状态
-    self.sessionLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 264, MV_PANEL_W - 24, 40)];
+    self.sessionLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 272, MV_PANEL_W - 24, 36)];
     self.sessionLabel.font = [UIFont systemFontOfSize:11];
     self.sessionLabel.numberOfLines = 2;
     self.sessionLabel.adjustsFontSizeToFitWidth = YES;

@@ -131,19 +131,16 @@
         self.statusLabel.text = @"⚠️ 请先在 设置→我的语音 填写 DashScope API Key";
         return;
     }
-    if (!design && !MVOSSBucket().length) {
-        self.statusLabel.text = @"⚠️ 录音复刻需先在设置里配好 OSS；\n不想配 OSS 就切到「文字设计」，那个不需要。";
-        return;
-    }
+    // ★ 2.4.0：录音复刻改走 DashScope 临时托管，不再要求 OSS（配了自有 OSS 会优先用）
     self.statusLabel.text = design
         ? @"填一句音色描述，点「生成音色」。约 10~30 秒。\n不需要录音，也不需要 OSS。"
-        : @"点「开始录音」，读 15~30 秒安静干声。";
+        : @"点「开始录音」，读 15~30 秒安静干声，松手自动复刻。\n只需 API Key，无需配置 OSS。";
 }
 
 - (void)toggleRec {
     if (self.recorder && self.recorder.isRecording) { [self.recorder stop]; return; }
-    if (!MVAPIKey().length || !MVOSSBucket().length) {
-        self.statusLabel.text = @"⚠️ 录音复刻需要 API Key + OSS；或改用「文字设计」。";
+    if (!MVAPIKey().length) {
+        self.statusLabel.text = @"⚠️ 录音复刻需要先在 设置→我的语音 填写 DashScope API Key";
         return;
     }
     NSError *e = nil;
@@ -168,7 +165,7 @@
 - (void)audioRecorderDidFinishRecording:(AVAudioRecorder*)recorder successfully:(BOOL)ok {
     [self.recBtn setTitle:@"开始录音（15~30秒安静干声）" forState:UIControlStateNormal];
     if (!ok) { self.statusLabel.text = @"录音失败"; return; }
-    self.statusLabel.text = @"录音完成，正在克隆…";
+    self.statusLabel.text = @"录音完成，正在上传托管并复刻…";
     NSString *name = self.nameField.text.length ? self.nameField.text : @"我的声音";
     NSString *model = MVCurrentModel();
     [[MyVoiceCloud shared] cloneVoiceWithName:name referenceAudioPath:self.recPath
