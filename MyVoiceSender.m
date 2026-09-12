@@ -70,7 +70,10 @@
         if ([NSThread isMainThread]) hasChatVC = ([MyVoiceResolver currentChatVC] != nil);
         else dispatch_sync(dispatch_get_main_queue(), ^{ hasChatVC = ([MyVoiceResolver currentChatVC] != nil); });
         if (!hasChatVC) {
-            MVLog(@"send 取消：未识别聊天对象且当前不在任何聊天页");
+            // ★ 2.3.1：把 VC 树完整倒进日志 —— 若用户明明在聊天页却走到这里，
+            //   说明聊天页类名连模糊规则都没匹配上，日志里能直接看到真实类名。
+            MVLog(@"send 取消：未识别聊天对象且当前不在任何聊天页。VC 树：\n%@\n会话解析诊断：\n%@",
+                  [MyVoiceResolver vcTreeDump], [MyVoiceResolver talkerDiag]);
             [[MyVoiceManager shared] toast:@"未识别到聊天对象：请先进入聊天页再发送"];
             return;
         }

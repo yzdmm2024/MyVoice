@@ -167,7 +167,11 @@ static id MVFindInGraph(id obj, NSArray *names, int depth, int *guard) {
     @try { vcList = [MyVoiceResolver allViewControllers]; } @catch (NSException *e) { vcList = nil; }
     for (UIViewController *vc in vcList) {
         @try {
-            if (![MyVoiceResolver isChatVC:vc]) continue;
+            // ★ 2.3.1：先严格（MsgContent）后模糊（ChatViewController 等）——
+            //   新版微信改了聊天页类名时也能定位到 RecordController/AudioSender
+            BOOL strictHit = [MyVoiceResolver isChatVC:vc];
+            BOOL relaxedHit = !strictHit && [MyVoiceResolver isChatVCRelaxed:vc];
+            if (!strictHit && !relaxedHit) continue;
             int g = 0;
             id r = MVFindInGraph(vc, names, 0, &g);
             if (r) return r;
@@ -274,7 +278,8 @@ static id gAS = nil;      // AudioSender
     //   空会话里录（StartRecordingFromUsr: 传空 ToUsr 行为不可知，必须避免）。
     if (!talker.length) talker = [MyVoiceResolver currentTalker];
     if (!talker.length) {
-        MVLog(@"[direct] ❌ 无法确定会话 ID（wxid），放弃直发");
+        MVLog(@"[direct] ❌ 无法确定会话 ID（wxid），放弃直发。VC 树：\n%@",
+              [MyVoiceResolver vcTreeDump]);
         fin(NO, @"未识别到会话 ID（请停留在聊天页里再试）");
         return;
     }

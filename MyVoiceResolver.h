@@ -21,7 +21,14 @@
 + (NSString*)currentTalker;
 + (UIViewController*)topViewController;
 // ★ 2.3.0：当前打开的聊天页 VC（自动发送在 wxid 解析失败时的兜底判断）。⚠️ 主线程调用。
+//   2.3.1 起先严格（MsgContent）后模糊（ChatViewController 等）匹配。
 + (UIViewController*)currentChatVC;
+// ★ 2.3.1：模糊聊天页判定（微信改聊天页类名后的兜底；只用于安全 getter 路径）
++ (BOOL)isChatVCRelaxed:(id)vc;
+// ★ 2.3.1：带 relaxed 开关的会话解析（relaxed 时只走 getChatUserName/GetContact/m_contact）
++ (NSString*)talkerFromChatVC:(id)vc relaxed:(BOOL)relaxed;
+// ★ 2.3.1：当前 VC 树类名清单（发送失败时落日志，用于精修新版微信符号）
++ (NSString*)vcTreeDump;
 // 遍历当前所有可见 VC（含子/模态），用于定位聊天页与「按住说话」按钮
 + (NSArray<UIViewController*>*)allViewControllers;
 // 判定某个 VC 是不是聊天页（类名含 MsgContent）

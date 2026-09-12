@@ -246,7 +246,15 @@ static BOOL MVLooksLikeObject(id o) {
 }
 
 + (NSString*)talkerFromChatVC:(id)vc {
-    if (![self isChatVC:vc]) return nil;
+    return [self talkerFromChatVC:vc relaxed:NO];
+}
+
+// ★ 2.3.1：relaxed=YES 时 vc 是「模糊命中」的聊天页（类名已不带 MsgContent，多半是新版微信
+//   改了类名）。此时只允许走最可信的 getter 路径 ①-④（getChatUserName / GetContact /
+//   m_contact / m_delegate.m_contact）—— 这些只有真正的聊天页才有；绝不走 ⑤⑥ 扫字段兜底，
+//   防止误认的 VC 挖出错误 wxid 发错人。
++ (NSString*)talkerFromChatVC:(id)vc relaxed:(BOOL)relaxed {
+    if (relaxed ? ![self isChatVCRelaxed:vc] : ![self isChatVC:vc]) return nil;
 
     // ① 直接问它（8.0.75 上 BaseMsgContentViewController / LogicController 都有）。
     //    ★ 2.3.0：自定义微信号（不带 wxid_ 前缀）也算数，否则这种聊天页永远「未识别」。
@@ -275,6 +283,8 @@ static BOOL MVLooksLikeObject(id o) {
         }
         if (t) return t;
     }
+
+    if (relaxed) return nil;   // ★ 2.3.1：模糊命中的 VC 不走扫字段兜底
 
     // ⑤ 当前会话窗口里的消息（只对群有效）
     for (NSString *f in @[@"m_lastMsgInNewArray", @"m_firstUnReadMsg", @"m_scrollTargetMsg",
@@ -320,19 +330,71 @@ static BOOL MVLooksLikeObject(id o) {
 
 + (NSString*)currentTalker {
     // ① 活着的聊天页（最准）
-    for (UIViewController *vc in [self allViewControllers]) {
+    NSArray *vcs = [self allViewControllers];
+    for (UIViewController *vc in vcs) {
         NSString *t = [self talkerFromChatVC:vc];
         if (t) return t;
     }
-    // ② 之前 hook 捕获 / 落盘记住的
+    // ★ 2.3.1 ②模糊：新版微信若改了聊天页类名，用模糊命中的 VC 走安全 getter 再试一次
+    for (UIViewController *vc in vcs) {
+        if (![self isChatVC:vc] && [self isChatVCRelaxed:vc]) {
+            NSString *t = [self talkerFromChatVC:vc relaxed:YES];
+            if (t) {
+                MVLog(@"[resolver] 会话来自模糊匹配的聊天页 %@ → %@",
+                      NSStringFromClass(object_getClass(vc)), t);
+                return t;
+            }
+        }
+    }
+    // ③ 之前 hook 捕获 / 落盘记住的
     return [self capturedTalker];
+}
+
+// ★ 2.3.1：把当前整个 VC 树的类名倒出来（发送失败时写日志，用户贴回来就能
+//   直接看到聊天页的真实类名 —— 是精修新版微信符号的唯一可靠依据）。
++ (NSString*)vcTreeDump {
+    NSMutableString *s = [NSMutableString string];
+    NSArray *vcs = [self allViewControllers];
+    [s appendFormat:@"VC 树共 %lu 个：\n", (unsigned long)vcs.count];
+    int n = 0;
+    for (UIViewController *vc in vcs) {
+        if (n++ >= 50) { [s appendString:@"  …(截断)\n"]; break; }
+        if (!MVLooksLikeObject(vc)) { [s appendString:@"  (脏指针，跳过)\n"]; continue; }
+        NSString *cn = NSStringFromClass(object_getClass(vc));
+        NSString *mark = [self isChatVC:vc] ? @"  <== 聊天页(严格)"
+                        : ([self isChatVCRelaxed:vc] ? @"  <== 聊天页(模糊)" : @"");
+        [s appendFormat:@"  %@%@\n", cn, mark];
+    }
+    return s;
+}
+
+// ★ 2.3.1：模糊聊天页判定 —— 给「微信更新后聊天页类名不再含 MsgContent」的情况兜底。
+//   只按 VC 类名匹配这些特征：ChatViewController / ChatRoomView / ConversationView /
+//   MessageViewController。指针闸门与 isChatVC 相同。⚠️ 模糊命中只用于「判断在不在聊天页」
+//   和「走安全 getter 取会话」，不做扫字段，防误认。
++ (BOOL)isChatVCRelaxed:(id)vc {
+    if (!MVLooksLikeObject(vc)) return NO;
+    Class cls = object_getClass(vc);
+    if (!cls) return NO;
+    NSString *cn = NSStringFromClass(cls);
+    if (![cn isKindOfClass:[NSString class]] || !cn.length) return NO;
+    if ([cn rangeOfString:@"MsgContent"].location != NSNotFound) return YES;
+    for (NSString *k in @[@"ChatViewController", @"ChatRoomView", @"ConversationView",
+                          @"MessageViewController"]) {
+        if ([cn rangeOfString:k].location != NSNotFound) return YES;
+    }
+    return NO;
 }
 
 // ★ 2.3.0：当前打开的聊天页 VC 实例。自动发送链路在 wxid 解析失败时用它判断
 //   「用户是否就在聊天页里」，从而决定继续尝试而不是直接报错。⚠️ 主线程调用。
+//   2.3.1 起先严格匹配（类名含 MsgContent），找不到再模糊匹配。
 + (UIViewController*)currentChatVC {
-    for (UIViewController *vc in [self allViewControllers]) {
-        if ([self isChatVC:vc]) return vc;
+    NSArray *vcs = [self allViewControllers];
+    for (UIViewController *vc in vcs) if ([self isChatVC:vc]) return vc;
+    for (UIViewController *vc in vcs) if ([self isChatVCRelaxed:vc]) {
+        MVLog(@"[resolver] 严格匹配未命中聊天页，模糊命中：%@", NSStringFromClass(object_getClass(vc)));
+        return vc;
     }
     return nil;
 }
