@@ -22,6 +22,9 @@ jobs:
       - name: Vendor Flite (真实离线TTS，失败则回退 Sine 占位)
         run: bash flite/vendor.sh || echo "::warning::flite vendor 失败，使用内置 Sine 占位"
 
+      - name: Normalize control line endings (防止 CRLF 导致打包失败)
+        run: sed -i '' 's/\r$//' control
+
       - name: Build rootless deb
         run: make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
 
