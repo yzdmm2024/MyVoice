@@ -275,6 +275,10 @@ static inline NSString* MVOSSSk(void)       { return MVGetStr(@"ossSk"); }
 // 触发方式：0 = 悬浮按钮（默认）；1 = 长按录音键
 static inline NSInteger MVTrigger(void){ id v = MVGet(@"trigger"); return v ? [v integerValue] : 0; }
 
+// 自动发送：装填完成后自动模拟「按住说话」并在 TTS 时长后自动松手，免去手动按住
+// （默认开启；自动触发若未生效会自动回退成手动提示，绝不会比现在更差）
+static inline NSInteger MVAutoSend(void){ id v = MVGet(@"autoSend"); return v ? [v boolValue] : YES; }
+
 // ---- UI 线程安全（2.0.15 修的崩溃）----
 // 引擎合成回调【一定不在主线程】：
 //   · 离线 AVSpeech 引擎：dispatch_get_global_queue(QOS_CLASS_DEFAULT) 上跑（队列名 com.apple.root.default-qos）
