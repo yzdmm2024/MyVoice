@@ -64,6 +64,9 @@
 // ★ 2.2.5：TTS 是否已全部喂进录音管线（发送方据此决定 StopRecord 时机）
 + (BOOL)fedDone;
 
+// ★ 2.2.6：回调节奏报告（诊断"一卡一卡"用）。必须在主线程调用。
++ (NSString*)cadenceReport;
+
 // 绑定队列申报的采样率（0 = 还没绑定/未知）
 + (double)pipelineRate;
 

@@ -80,6 +80,11 @@ static id MVInvoke(id obj, NSString *selName, NSArray *args) {
     return nil;
 }
 
+// TTS 喂完后到 StopRecord 之间的余量（秒）。只为让最后一块 buffer 落地，
+// 太长会白录一段静音、拖长发送时间。参考实现 v23 从 1.2s 收到 0.3s；
+// 实测最后一块在 100ms 内必落地，这里取 0.25s。
+static const double kMVPostFeedWait = 0.25;
+
 @implementation MyVoiceDirectSend
 
 + (instancetype)shared {
@@ -303,7 +308,7 @@ static id gAS = nil;      // AudioSender
     // ---- 轮询：等「TTS 真正喂完」（fedDone）再松手 ----
     // 参考实现（TTSFloat v29）铁证：按【预估时长】定时 Stop 会截断数据 →
     // 微信一直在等完整音频 → 转圈/半截语音/好久不出来。
-    // 这里改成等 fedDone（与真实喂入字节数挂钩，和采样率无关），再留 0.35s 让最后一块落地。
+    // 这里改成等 fedDone（与真实喂入字节数挂钩，和采样率无关），再留一点余量（kMVPostFeedWait）让最后一块落地。
     double est = MAX(0.6, seconds);
     NSInteger capMs = (NSInteger)(MAX(8.0, est * 3.0 + 3.0) * 1000.0);   // 硬上限，防卡死
     __block NSInteger waited = 0;
@@ -322,10 +327,12 @@ static id gAS = nil;      // AudioSender
         }
         if (done || (started && waited >= capMs)) {
             [t invalidate];
-            MVLog(@"[direct] ✅ TTS 已喂完（%ldms，%lu/%lu 字节），0.35s 后停止并发送",
+            MVLog(@"[direct] ✅ TTS 已喂完（%ldms，%lu/%lu 字节）→ %.2fs 后停止并发送",
                   (long)waited, (unsigned long)[MyVoiceRecorder fedBytes],
-                  (unsigned long)[MyVoiceRecorder totalBytes]);
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                  (unsigned long)[MyVoiceRecorder totalBytes], kMVPostFeedWait);
+            // 回调节奏报告：判断卡顿是否真由管线缺口造成（间隔 >> 块时长即为缺口）
+            MVLog(@"[direct] %@", [MyVoiceRecorder cadenceReport]);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kMVPostFeedWait * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 NSString *used = [MyVoiceDirectSend stopWith:stopTarget sender:stopIsSender fallbackRC:rc];
                 MVLog(@"[direct] ✅ 已调用停止/发送：%@（微信自行完成 SILK 编码/入库/上传/气泡）", used);

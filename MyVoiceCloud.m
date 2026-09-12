@@ -235,41 +235,123 @@ static NSError* MVErr(NSString *msg) {
     }] resume];
 }
 
-// wav 数据 → 24kHz 单声道 S16 PCM
+// ---- RIFF 小工具 ----
+static inline uint16_t MVrd16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
+static inline uint32_t MVrd32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+// wav → **16kHz 单声道 S16** PCM（确定性实现，不依赖 AVAudioConverter）
+//
+// 为什么换掉 AVAudioConverter（2.2.6）：
+//   旧实现用 convertToBuffer:error:withInputFromBlock:，而那个 block 无论被调用几次
+//   都返回同一个 inBuf 并标 HaveData。转换器在一次 convert 调用里若需要多于一个输入块
+//   （降采样时非常常见），就会**把同一段输入再消费一遍** → 输出里插进重复帧。
+//   听感正是用户反馈的"一卡一卡 / 有两个声音"。
+//   现在自己解析 RIFF 头拿到真实采样率/声道/位深，自己降混 + 自己线性重采样，
+//   全流程确定、可核对（日志会打印真实格式），并保证输出恒为 16kHz 单声道。
 - (NSData*)pcmFromWavData:(NSData*)wav {
+    if (wav.length < 44) { MVLog(@"[wav] 数据太短 %lu 字节", (unsigned long)wav.length); return nil; }
+    const uint8_t *b = (const uint8_t*)wav.bytes;
+
+    if (memcmp(b, "RIFF", 4) != 0 || memcmp(b + 8, "WAVE", 4) != 0) {
+        // 不是 RIFF/WAVE（个别版本可能直接吐裸 PCM）：按 DashScope 常见的
+        // 24kHz 单声道 S16 兜底处理，至少保证音调/时长正确。
+        MVLog(@"[wav] 非 RIFF/WAVE 头，按 24kHz 单声道 S16 兜底（%lu 字节）", (unsigned long)wav.length);
+        NSData *o = MVResampleS16Mono(wav, 24000.0, MV_WECHAT_SR);
+        MVLog(@"[wav] → 16kHz %lu 字节 ≈ %.2fs", (unsigned long)o.length, o.length / 32000.0);
+        return o.length ? o : nil;
+    }
+
+    uint16_t tag = 0, ch = 0, bits = 0;
+    uint32_t rate = 0;
+    const uint8_t *dat = NULL; NSUInteger datLen = 0;
+    NSUInteger off = 12;
+    while (off + 8 <= wav.length) {
+        const uint8_t *cid = b + off;
+        uint32_t csz = MVrd32(b + off + 4);
+        NSUInteger body = off + 8;
+        if (csz > (uint32_t)(wav.length - body)) csz = (uint32_t)(wav.length - body);
+        if (memcmp(cid, "fmt ", 4) == 0 && csz >= 16) {
+            tag  = MVrd16(b + body);
+            ch   = MVrd16(b + body + 2);
+            rate = MVrd32(b + body + 4);
+            bits = MVrd16(b + body + 14);
+            // WAVE_FORMAT_EXTENSIBLE：真实格式在 SubFormat 的头 2 字节
+            if (tag == 0xFFFE && csz >= 26) tag = MVrd16(b + body + 24);
+        } else if (memcmp(cid, "data", 4) == 0) {
+            dat = b + body; datLen = csz;
+        }
+        off = body + csz + (csz & 1);   // 块按偶数字节对齐
+    }
+    MVLog(@"[wav] 真实格式：tag=%u %uch %uHz %ubit data=%lu字节",
+          tag, ch, rate, bits, (unsigned long)datLen);
+    if (!dat || !datLen) { MVLog(@"[wav] 未找到 data 块"); return nil; }
+    if (bits != 16 || tag != 1) {
+        MVLog(@"[wav] 非 16bit PCM，转 AVAudioFile 兜底");
+        return [self pcmFromWavViaAVF:wav];
+    }
+    if (ch < 1 || ch > 2) { MVLog(@"[wav] 声道数异常 %u", ch); return nil; }
+
+    NSData *mono = nil;
+    if (ch == 1) {
+        mono = [NSData dataWithBytes:dat length:datLen];
+    } else {
+        NSUInteger n = datLen / 4;                 // 交错 LRLR
+        NSMutableData *m = [NSMutableData dataWithLength:n * 2];
+        if (!m) return nil;
+        const short *i16 = (const short*)dat;
+        short *o = (short*)m.mutableBytes;
+        for (NSUInteger i = 0; i < n; i++)
+            o[i] = (short)(((int)i16[i * 2] + (int)i16[i * 2 + 1]) / 2);
+        mono = m;
+    }
+    if (!mono.length) return nil;
+
+    double srcRate = rate ? (double)rate : 24000.0;
+    NSData *out = MVResampleS16Mono(mono, srcRate, MV_WECHAT_SR);
+    if (!out.length) { MVLog(@"[wav] 重采样无输出"); return nil; }
+    MVLog(@"[wav] ✅ %uHz %uch → 16kHz 单声道 %lu 字节 ≈ %.2fs",
+          rate, ch, (unsigned long)out.length, out.length / 32000.0);
+    return out;
+}
+
+// 兜底：非 16bit PCM 的 wav 用 AVAudioFile 解。
+// ★ 关键修正：输入 block 对同一块 buffer 只能供给一次 —— 重复返回正是"重复帧/一卡一卡"的根因。
+- (NSData*)pcmFromWavViaAVF:(NSData*)wav {
     NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:
         [NSString stringWithFormat:@"mv_%@.wav", [[NSUUID UUID] UUIDString]]];
     if (![wav writeToFile:tmp atomically:NO]) return nil;
     NSError *e = nil;
     AVAudioFile *file = [[AVAudioFile alloc] initForReading:[NSURL fileURLWithPath:tmp] error:&e];
-    if (!file) { MVLog(@"[cloud] AVAudioFile 失败 %@", e); return nil; }
-
+    if (!file) { MVLog(@"[wav] AVAudioFile 打开失败 %@", e); return nil; }
+    double srcRate = file.processingFormat.sampleRate > 0 ? file.processingFormat.sampleRate : 24000.0;
     AVAudioFormat *outFmt = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16
-                                                              sampleRate:MV_WECHAT_SR
-                                                               channels:1
-                                                            interleaved:NO];
+                                                             sampleRate:MV_WECHAT_SR
+                                                              channels:1
+                                                           interleaved:NO];
     AVAudioConverter *conv = [[AVAudioConverter alloc] initFromFormat:file.processingFormat toFormat:outFmt];
     NSMutableData *pcm = [NSMutableData data];
     while (1) {
         AVAudioPCMBuffer *inBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:file.processingFormat
                                                                frameCapacity:4096];
-        AVAudioConverterInputStatus st = 0;
         BOOL ok = [file readIntoBuffer:inBuf error:&e];
         if (!ok || inBuf.frameLength == 0) break;
-        AVAudioPCMBuffer *outBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFmt
-                                                                frameCapacity:inBuf.frameLength];
+        AVAudioFrameCount cap = (AVAudioFrameCount)((double)inBuf.frameLength * MV_WECHAT_SR / srcRate + 64);
+        AVAudioPCMBuffer *outBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFmt frameCapacity:cap];
+        __block BOOL served = NO;
         NSError *cerr = nil;
-        [conv convertToBuffer:outBuf error:&cerr withInputFromBlock:^AVAudioBuffer*(AVAudioPacketCount npackets, AVAudioConverterInputStatus *status){
-            *status = AVAudioConverterInputStatus_HaveData;
-            return inBuf;
+        [conv convertToBuffer:outBuf error:&cerr
+           withInputFromBlock:^AVAudioBuffer*(AVAudioPacketCount np, AVAudioConverterInputStatus *st){
+            if (served) { *st = AVAudioConverterInputStatus_NoDataNow; return nil; }
+            served = YES; *st = AVAudioConverterInputStatus_HaveData; return inBuf;
         }];
-        if (outBuf.frameLength > 0) {
-            int16_t *ch = outBuf.int16ChannelData[0];
-            [pcm appendBytes:ch length:outBuf.frameLength * 2];
-        }
+        if (outBuf.frameLength > 0 && outBuf.int16ChannelData)
+            [pcm appendBytes:outBuf.int16ChannelData[0] length:outBuf.frameLength * 2];
     }
     [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
-    MVLog(@"[cloud] wav→pcm %lu bytes (@24k)", (unsigned long)pcm.length);
+    MVLog(@"[wav] AVF 兜底 → 16kHz %lu 字节 ≈ %.2fs",
+          (unsigned long)pcm.length, pcm.length / 32000.0);
     return pcm.length ? pcm : nil;
 }
 

@@ -1,6 +1,7 @@
 #import "MyVoiceRecorder.h"
 #import "MyVoiceCommon.h"
 #import <AudioToolbox/AudioToolbox.h>
+#include <time.h>
 
 // MSHookFunction（substrate / ellekit 都提供同名 C 符号）。
 // 刻意不 include substrate.h：rootless 环境里那个头的路径在各家实现下不一致，
@@ -53,6 +54,16 @@ static BOOL          g_mvRateLogged = NO;
 static BOOL       g_mvHooked = NO;
 static NSUInteger g_mvCbSeq  = 0;           // 回调序号（诊断）
 
+// ---- ★ 2.2.6 回调节奏采样（诊断卡顿是否真由管线缺口造成）----
+// 录音实时回调线程里只往数组里写数字（无 IO、无字符串拼接），文本拼装留给主线程
+// 的 cadenceReport。判据：若回调间隔(ms)明显大于该块自身时长(字节/32 ms)，
+// 说明录音管线中间出现缺口 = 真的会卡。
+#define MV_CB_TRACE_MAX 96
+static UInt32    g_mvCbSize[MV_CB_TRACE_MAX];
+static UInt32    g_mvCbDtMs[MV_CB_TRACE_MAX];
+static NSInteger g_mvCbTraceN = 0;
+static uint64_t  g_mvLastNs   = 0;
+
 static OSStatus (*g_mvOrigAQNewInput)(const AudioStreamBasicDescription*, AudioQueueInputCallback,
                                       void*, CFRunLoopRef, CFStringRef, UInt32, AudioQueueRef*) = NULL;
 static OSStatus (*g_mvOrigAQNewInputDisp)(AudioQueueRef*, const AudioStreamBasicDescription*,
@@ -81,36 +92,21 @@ static void MVResetFeedStateLocked(void) {
     g_mvFedDone = NO;
     g_mvCbSeq = 0;
     g_mvRateLogged = NO;
+    g_mvCbTraceN = 0;
+    g_mvLastNs = 0;
 }
 
 #pragma mark - 重采样（S16 单声道，线性插值）
 
+// 真正的实现抽在 MyVoiceCommon.h（MVResampleS16Mono）——云端 wav 解码与这里共用同一条，
+// 避免两处各写一份、行为不一致。这里只补一行日志。
 static NSData* MVResampleS16(NSData *src, double srcRate, double dstRate) {
-    if (!src.length || srcRate <= 0 || dstRate <= 0) return nil;
-    if (fabs(srcRate - dstRate) < 1.0) return src;      // 同采样率直接原样用
-
-    NSUInteger nSrc = src.length / 2;
-    if (!nSrc) return nil;
-    double ratio = dstRate / srcRate;
-    NSUInteger nDst = (NSUInteger)((double)nSrc * ratio);
-    if (!nDst) return nil;
-
-    const short *in = (const short*)src.bytes;
-    NSMutableData *out = [NSMutableData dataWithLength:nDst * 2];
-    short *od = (short*)out.mutableBytes;
-    for (NSUInteger i = 0; i < nDst; i++) {
-        double pos = (double)i / ratio;
-        NSUInteger idx = (NSUInteger)pos;
-        double frac = pos - (double)idx;
-        if (idx >= nSrc) idx = nSrc - 1;
-        double a = in[idx];
-        double b = (idx + 1 < nSrc) ? in[idx + 1] : in[idx];
-        double v = a + (b - a) * frac;
-        if (v > 32767.0) v = 32767.0; else if (v < -32768.0) v = -32768.0;
-        od[i] = (short)v;
+    NSData *out = MVResampleS16Mono(src, srcRate, dstRate);
+    if (out && out != src && out.length != src.length) {
+        MVLog(@"[rec] 重采样 %.0fHz → %.0fHz：%lu → %lu 样本",
+              srcRate, dstRate,
+              (unsigned long)(src.length / 2), (unsigned long)(out.length / 2));
     }
-    MVLog(@"[rec] 重采样 %.0fHz → %.0fHz：%lu → %lu 样本",
-          srcRate, dstRate, (unsigned long)nSrc, (unsigned long)nDst);
     return out;
 }
 
@@ -180,6 +176,17 @@ static void MV_AQInputTrampoline(void *inUserData, AudioQueueRef inAQ,
                     if (!bufSz) bufSz = inBuffer->mAudioDataBytesCapacity;
                     NSUInteger total = src.length;
                     if (bufSz && g_mvOff < total) {
+                        // 诊断采样：纯内存写（无 IO / 无字符串），不会影响实时性
+                        uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC);
+                        if (g_mvCbTraceN < MV_CB_TRACE_MAX) {
+                            g_mvCbSize[g_mvCbTraceN] = bufSz;
+                            g_mvCbDtMs[g_mvCbTraceN] =
+                                (g_mvLastNs && nowNs > g_mvLastNs)
+                                    ? (UInt32)((nowNs - g_mvLastNs) / 1000000ULL) : 0;
+                            g_mvCbTraceN++;
+                        }
+                        g_mvLastNs = nowNs;
+
                         // 整块填满：块内不留间隙（杂音根因就是间隙）
                         NSUInteger take = MIN((NSUInteger)bufSz, total - g_mvOff);
                         memcpy(inBuffer->mAudioData, (const char*)src.bytes + g_mvOff, take);
@@ -381,8 +388,24 @@ static OSStatus MV_AudioQueueNewInputWithDispatchQueue(AudioQueueRef *outAQ,
         MVResetFeedStateLocked();
     }
     NSUInteger ms = feed.length * 1000 / (NSUInteger)(dstRate * 2);
-    MVLog(@"[rec] 装填主档 %lu 字节 ≈ %lums @16kHz（原 %.0fHz / %lu 字节）— 等待发送",
+    MVLog(@"[rec] 装填主档 %lu 字节 ≈ %lums @16kHz（引擎输出 %.0fHz / %lu 字节）— 等待发送",
           (unsigned long)feed.length, (unsigned long)ms, srcRate, (unsigned long)pcm.length);
+    // 诊断落盘（只保留最后一次）：把**真正喂进录音管线**的 16kHz PCM 存成 wav。
+    // 目的：若还有"卡/变调"，可直接拖出来听 + 量，不必靠猜。
+    // 位置在信号量之外、且不在音频回调线程上，开销可忽略。
+    @try {
+        NSString *lp = MVLogFilePath();
+        NSString *dir = lp.length ? [lp stringByDeletingLastPathComponent]
+                                  : [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
+        NSData *wav = MVWav16kFromPCM(feed);
+        if (wav) {
+            NSString *dp = [dir stringByAppendingPathComponent:@"MyVoice_last.wav"];
+            if ([wav writeToFile:dp atomically:NO])
+                MVLog(@"[rec] 诊断 wav 已写出：%@（%.2fs / %lu 字节）",
+                      dp, ms / 1000.0, (unsigned long)wav.length);
+        }
+    } @catch (NSException *e) { MVLog(@"[rec] 诊断 wav 写出异常 %@", e.reason); }
+
     return ms;
 }
 
@@ -439,6 +462,20 @@ static OSStatus MV_AudioQueueNewInputWithDispatchQueue(AudioQueueRef *outAQ,
     BOOL v = NO;
     @synchronized([NSObject class]) { v = g_mvFedDone; }
     return v;
+}
+
+// 回调节奏报告（诊断用，在主线程调用；实时回调只写数字，不做字符串/IO）
++ (NSString*)cadenceReport {
+    NSMutableString *s = [NSMutableString string];
+    @synchronized([NSObject class]) {
+        NSInteger n = g_mvCbTraceN;
+        [s appendFormat:@"替换期回调 %ld 次 | 每块字节 [", (long)n];
+        for (NSInteger i = 0; i < n && i < 20; i++) [s appendFormat:@"%u ", g_mvCbSize[i]];
+        [s appendString:@"] | 间隔ms ["];
+        for (NSInteger i = 0; i < n && i < 20; i++) [s appendFormat:@"%u ", g_mvCbDtMs[i]];
+        [s appendString:@"]  （每块时长≈字节/32 ms；间隔明显大于块时长 = 管线中间有缺口）"];
+    }
+    return s;
 }
 
 + (double)pipelineRate {

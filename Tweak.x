@@ -50,7 +50,7 @@
 
 %ctor {
     @autoreleasepool {
-        MVLog(@"载入 我的语音 v2.2.5（等 TTS 喂完再松手 + 单一数据流/精确绑定单队列：修延迟与重音）");
+        MVLog(@"载入 我的语音 v2.2.6（wav 解码改为自研 RIFF 解析＋线性重采样：根治卡顿/变调；新增节奏诊断）");
         MVLog(@"日志文件：%@", MVLogFilePath() ?: @"(不可写，只能用 syslog)");
         [[MyVoiceManager shared] setup];
 

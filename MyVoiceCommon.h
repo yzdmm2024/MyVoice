@@ -80,6 +80,57 @@ static inline void MVLogAppend(NSString *line) {
 //    改成录音管线劫持后必须以管线真实采样率为准，否则音调/时长会错位。
 #define MV_WECHAT_SR 16000.0
 
+// ---- S16 单声道重采样（线性插值，确定性实现）----
+// 为什么要抽到公共头：云端 wav 解码与录音管线注入必须用**同一条**实现。
+// 之前云端用 AVAudioConverter，而 convertToBuffer:error:withInputFromBlock: 的
+// 输入 block 每次都被返回同一个 inBuf（HaveData），转换器在一次调用里需要多于一个
+// 输入块时会**重复消费同一段输入** → 输出里插进重复帧，听感就是"一卡一卡/两个声音"。
+static inline NSData* MVResampleS16Mono(NSData *src, double srcRate, double dstRate) {
+    if (!src.length || srcRate <= 0 || dstRate <= 0) return src ?: [NSData data];
+    NSUInteger nSrc = src.length / 2;
+    if (!nSrc) return nil;
+    double diff = srcRate > dstRate ? srcRate - dstRate : dstRate - srcRate;
+    if (diff < 1.0) return src;                       // 同采样率：原样（零拷贝）
+    double ratio = dstRate / srcRate;
+    NSUInteger nDst = (NSUInteger)((double)nSrc * ratio + 0.5);
+    if (!nDst) return nil;
+    const short *in = (const short*)src.bytes;
+    NSMutableData *out = [NSMutableData dataWithLength:nDst * 2];
+    if (!out) return nil;
+    short *od = (short*)out.mutableBytes;
+    for (NSUInteger i = 0; i < nDst; i++) {
+        double pos = (double)i / ratio;
+        NSUInteger idx = (NSUInteger)pos;
+        double frac = pos - (double)idx;
+        if (idx >= nSrc) idx = nSrc - 1;
+        double a = in[idx];
+        double b = (idx + 1 < nSrc) ? in[idx + 1] : in[idx];
+        double v = a + (b - a) * frac;
+        if (v > 32767.0) v = 32767.0; else if (v < -32768.0) v = -32768.0;
+        od[i] = (short)v;
+    }
+    return out;
+}
+
+// 把 16kHz 单声道 S16 PCM 包成标准 WAV（诊断落盘用：可以直接拖出来听）
+static inline NSData* MVWav16kFromPCM(NSData *pcm) {
+    if (!pcm.length || pcm.length > 0xFFFFFF00u) return nil;
+    uint32_t dl = (uint32_t)pcm.length;
+    unsigned char h[44];
+    uint32_t rl = 36 + dl, fl = 16, sr = 16000, br = 32000;
+    uint16_t af = 1, nc = 1, ba = 2, bps = 16;
+    memcpy(h,      "RIFF", 4); memcpy(h + 4,  &rl, 4);
+    memcpy(h + 8,  "WAVE", 4); memcpy(h + 12, "fmt ", 4);
+    memcpy(h + 16, &fl, 4);    memcpy(h + 20, &af, 2);
+    memcpy(h + 22, &nc, 2);    memcpy(h + 24, &sr, 4);
+    memcpy(h + 28, &br, 4);    memcpy(h + 32, &ba, 2);
+    memcpy(h + 34, &bps, 2);   memcpy(h + 36, "data", 4);
+    memcpy(h + 40, &dl, 4);
+    NSMutableData *d = [NSMutableData dataWithBytes:h length:44];
+    [d appendData:pcm];
+    return d;
+}
+
 static inline NSUserDefaults* MVPrefs(void) {
     static NSUserDefaults *d;
     static dispatch_once_t t;
