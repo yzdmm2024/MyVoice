@@ -465,7 +465,7 @@
 
 #pragma mark - 发送/预览/克隆
 
-- (NSString*)selectedVoiceID {
+- (NSString*)resolvedVoiceID {
     NSString *vid = self.selectedVoiceID;
     if (vid.length) return vid;
     return (MVTTSProvider() == 1) ? MVQwenVoice() : MVCurrentVoiceID();
@@ -487,7 +487,7 @@
 - (void)onPreview {
     NSString *text = [self.textView.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (!text.length) { [[MyVoiceManager shared] toast:@"请先输入文字"]; return; }
-    [MyVoiceEngine previewText:text voiceID:[self selectedVoiceID]];
+    [MyVoiceEngine previewText:text voiceID:[self resolvedVoiceID]];
 }
 
 - (void)onClone {
