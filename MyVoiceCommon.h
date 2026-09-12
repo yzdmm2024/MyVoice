@@ -174,13 +174,17 @@ static inline NSDictionary* MVSharedPrefs(void) {
     return cache;   // 文件不在（或读不到）时退回上一次的缓存
 }
 
-// 稳健读取：① 共享域 plist（jbroot，真正管用的那条）→ ② 共享 suite（容器内）
-//          → ③ cfprefsd 域 → ④ 容器里的同名 plist
+// 稳健读取：★ 2.4.3 起【容器 suite 优先】→ ② 共享域 plist（jbroot）→ ③ cfprefsd 域 → ④ 全局文件。
+//   为什么调换顺序：面板里的选择（qwenVoice/currentVoiceID/ttsProvider…）通过 MVSetShared
+//   写容器 + jbroot 两处，但微信沙箱对 jbroot 的写入可能失败/滞后 —— 旧序 jbroot 优先时，
+//   读到的永远是 Settings 写下的旧值，导致「选了音色却不出现在面板/不生效」。
+//   容器里存的一定是微信进程自己写的最新值；而 Settings 写入的键（apiKey/oss*）在微信
+//   容器里不存在，自然落到 jbroot 那一级 —— 两边互不干扰。
 static inline id MVGet(NSString *key) {
-    NSDictionary *shared = MVSharedPrefs();
-    id v = shared[key];
+    id v = [MVPrefs() objectForKey:key];
     if (v) return v;
-    v = [MVPrefs() objectForKey:key];
+    NSDictionary *shared = MVSharedPrefs();
+    v = shared[key];
     if (v) return v;
     CFPropertyListRef cv = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
                                                      (__bridge CFStringRef)MV_PREFS_ID);

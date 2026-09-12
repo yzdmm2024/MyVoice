@@ -310,11 +310,15 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
     if (!text.length)  { completion(nil, MVErr(@"文字为空")); return; }
 
     NSString *url = [host stringByAppendingString:@"/services/audio/tts/SpeechSynthesizer"];
+    // ★ 2.4.3：format/sample_rate 属于 parameters（PC 端 200 实测格式）；
+    //   放在 input 里部分网关会忽略，且响应字段也不是当初以为的 audio_url。
     NSDictionary *body = @{
         @"model": model,
         @"input": @{
             @"text": text,
-            @"voice": voiceID,
+            @"voice": voiceID
+        },
+        @"parameters": @{
             @"format": @"wav",
             @"sample_rate": @16000
         }
@@ -339,17 +343,34 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
             completion(nil, MVErr([NSString stringWithFormat:@"TTS 失败 HTTP %ld：%@", (long)code, msg]));
             return;
         }
-        // 解析 audio_url（非流式返回 URL，24h 有效）
+        // ★ 2.4.3：真机抓包确认响应结构是 output.audio.url（http 链接，24h 有效），
+        //   另有 output.audio.data（Base64，一般同时给 URL 时为空）。旧版找的
+        //   output.audio_url 这个字段根本不存在 → 永远报「未返回音频 URL」。
         NSError *je = nil;
         NSDictionary *j = [NSJSONSerialization JSONObjectWithData:d options:0 error:&je];
-        NSString *audioURL = nil;
-        if ([j[@"output"] isKindOfClass:[NSDictionary class]]) audioURL = j[@"output"][@"audio_url"];
-        if (!audioURL.length) audioURL = j[@"audio_url"];
-        if (!audioURL.length) {
-            MVLog(@"[cloud] TTS 未返回 audio_url：%@", j);
-            completion(nil, MVErr(@"TTS 未返回音频 URL（多为音色无效或未开通对应模型，请换音色/检查服务商）"));
+        NSDictionary *outDict = [j[@"output"] isKindOfClass:[NSDictionary class]] ? j[@"output"] : nil;
+        NSDictionary *audio = [outDict[@"audio"] isKindOfClass:[NSDictionary class]] ? outDict[@"audio"] : nil;
+        NSString *audioURL = [audio[@"url"] isKindOfClass:[NSString class]] ? audio[@"url"] : nil;
+        NSString *b64Data = [audio[@"data"] isKindOfClass:[NSString class]] ? audio[@"data"] : nil;
+        // 兼容旧字段名
+        if (!audioURL.length) audioURL = outDict[@"audio_url"] ?: j[@"audio_url"];
+
+        if (!audioURL.length && b64Data.length > 100) {
+            NSData *wd = [[NSData alloc] initWithBase64EncodedString:b64Data options:0];
+            NSData *pcm = [self pcmFromWavData:wd];
+            if (!pcm) { completion(nil, MVErr(@"音频解码失败（Base64）")); return; }
+            MVLog(@"[cloud] TTS（Base64）解码完成 %lu bytes PCM", (unsigned long)pcm.length);
+            completion(pcm, nil);
             return;
         }
+        if (!audioURL.length) {
+            MVLog(@"[cloud] TTS 未返回音频：%@", j);
+            completion(nil, MVErr(@"TTS 未返回音频（响应里既无 URL 也无 Base64，多为音色无效或未开通模型）"));
+            return;
+        }
+        // OSS 结果站支持 https，强制升级避免 ATS 拦 http
+        audioURL = [audioURL stringByReplacingOccurrencesOfString:@"http://" withString:@"https://"];
+        MVLog(@"[cloud] TTS 返回音频 URL：%@", audioURL);
         // 二次下载 wav
         [[s dataTaskWithURL:[NSURL URLWithString:audioURL] completionHandler:^(NSData *wd, NSURLResponse *wr, NSError *we){
             if (we || wd.length == 0) { MVLog(@"[cloud] 下载音频失败 %@", we); completion(nil, we ?: MVErr(@"下载音频为空")); return; }
