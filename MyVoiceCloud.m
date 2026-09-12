@@ -100,15 +100,22 @@ static NSError* MVErr(NSString *msg) {
     if (!text.length)   { completion(nil, MVErr(@"文字为空")); return; }
     NSString *voice = voiceID.length ? voiceID : MVQwenVoice();
     NSString *model = MVQwenModel();
+    NSString *emotion = MVQwenEmotion();
+    double speed = MVQwenSpeed();
 
     NSString *url = @"https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+    NSMutableDictionary *input = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"text": text,
+        @"voice": voice,
+        @"language_type": @"Auto"
+    }];
+    // 千问 3-tts-flash 支持 emotion/speed；若服务端不认这两个键会被忽略。
+    if (![emotion isEqualToString:@"default"]) input[@"emotion"] = emotion;
+    if (fabs(speed - 1.0) > 0.01) input[@"speed"] = @(speed);
+
     NSDictionary *body = @{
         @"model": model,
-        @"input": @{
-            @"text": text,
-            @"voice": voice,
-            @"language_type": @"Auto"
-        }
+        @"input": input
     };
     NSData *json = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 

@@ -194,7 +194,8 @@ static inline NSInteger MVEngineMode(void){ id v = MVGet(@"engineMode"); return 
 
 // 云端 TTS 服务商：0 = CosyVoice（克隆/设计音色）；1 = 千问 Qwen-TTS（官方预置音色，无需克隆）
 // 注意：同一个 DashScope API Key 两边通用，切换时不用换 Key。
-static inline NSInteger MVTTSProvider(void){ id v = MVGet(@"ttsProvider"); return v ? [v integerValue] : 0; }
+// 2.2.1 起默认改为千问，避免新用户没克隆音色时直接合成失败。
+static inline NSInteger MVTTSProvider(void){ id v = MVGet(@"ttsProvider"); return v ? [v integerValue] : 1; }
 
 // 千问 Qwen-TTS 模型名（qwen3-tts-flash 支持全部 48 个预置音色；老 qwen-tts 只支持前 4 个）
 static inline NSString* MVQwenModel(void) {
@@ -205,6 +206,21 @@ static inline NSString* MVQwenModel(void) {
 static inline NSString* MVQwenVoice(void) {
     NSString *v = MVGetStr(@"qwenVoice");
     return v.length ? v : @"Cherry";
+}
+
+// 千问 Qwen-TTS 语气（emotion）：默认/生气/愤怒/快乐/开朗
+static inline NSString* MVQwenEmotion(void) {
+    NSString *v = MVGetStr(@"qwenEmotion");
+    return v.length ? v : @"default";
+}
+// 千问 Qwen-TTS 语速：0.5 ~ 2.0，默认 1.0
+static inline double MVQwenSpeed(void) {
+    id v = MVGet(@"qwenSpeed");
+    if (v) {
+        double d = [v doubleValue];
+        if (d >= 0.5 && d <= 2.0) return d;
+    }
+    return 1.0;
 }
 
 // 千问预置音色（精选常用项；完整 48 个见
@@ -222,6 +238,8 @@ static inline NSArray* MVQwenVoiceList(void) {
         @{@"name": @"阿珍(沪语女)",    @"voiceID": @"Jada",     @"model": @"qwen3-tts-flash"},
         @{@"name": @"晓东(京腔男)",    @"voiceID": @"Dylan",    @"model": @"qwen3-tts-flash"},
         @{@"name": @"晴儿(川语女)",    @"voiceID": @"Sunny",    @"model": @"qwen3-tts-flash"},
+        @{@"name": @"Jennifer(美语)",  @"voiceID": @"Jennifer", @"model": @"qwen3-tts-flash"},
+        @{@"name": @"Ryan(男声)",      @"voiceID": @"Ryan",     @"model": @"qwen3-tts-flash"},
     ];
 }
 

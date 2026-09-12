@@ -44,8 +44,9 @@ static NSUInteger g_mvCbSeq     = 0;     // 回调序号（诊断）
 
 static OSStatus (*g_mvOrigAQNewInput)(const AudioStreamBasicDescription*, AudioQueueInputCallback,
                                       void*, CFRunLoopRef, CFStringRef, UInt32, AudioQueueRef*) = NULL;
-static OSStatus (*g_mvOrigAQNewInputDisp)(const AudioStreamBasicDescription*, void*,
-                                          AudioQueueInputCallback, dispatch_queue_t) = NULL;
+static OSStatus (*g_mvOrigAQNewInputDisp)(AudioQueueRef*, const AudioStreamBasicDescription*,
+                                          UInt32, dispatch_queue_t,
+                                          AudioQueueInputCallback) = NULL;
 
 static BOOL g_mvHooked = NO;
 
@@ -229,17 +230,18 @@ static OSStatus MV_AudioQueueNewInput(const AudioStreamBasicDescription *inForma
 // iOS 10+ 的新入口（微信多数版本仍走老的 AudioQueueNewInput，两个都挂更保险）。
 // 这个入口声明里拿不到 AudioQueueRef，没法精确按队列绑定 —— 用 aq=NULL 作占位键登记，
 // trampoline 里精确匹配失败时回退到占位项（见 MVQueueForAQ）。
-static OSStatus MV_AudioQueueNewInputWithDispatchQueue(const AudioStreamBasicDescription *inFormat,
-                                                       void *inUserData,
-                                                       AudioQueueInputCallback inCallbackProc,
-                                                       dispatch_queue_t inCallbackQueue) {
-    if (inCallbackProc && inUserData) {
+static OSStatus MV_AudioQueueNewInputWithDispatchQueue(AudioQueueRef *outAQ,
+                                                       const AudioStreamBasicDescription *inFormat,
+                                                       UInt32 inFlags,
+                                                       dispatch_queue_t inCallbackQueue,
+                                                       AudioQueueInputCallback inCallbackProc) {
+    if (inCallbackProc && inFormat && outAQ) {
         MVMakePipelineRateKnown(inFormat);
-        OSStatus st = g_mvOrigAQNewInputDisp(inFormat, inUserData, MV_AQInputTrampoline, inCallbackQueue);
+        OSStatus st = g_mvOrigAQNewInputDisp(outAQ, inFormat, inFlags, inCallbackQueue, MV_AQInputTrampoline);
         if (st == noErr) MVRegisterQueue(NULL, inCallbackProc, inFormat);
         return st;
     }
-    return g_mvOrigAQNewInputDisp(inFormat, inUserData, inCallbackProc, inCallbackQueue);
+    return g_mvOrigAQNewInputDisp(outAQ, inFormat, inFlags, inCallbackQueue, inCallbackProc);
 }
 
 #pragma mark - 对外

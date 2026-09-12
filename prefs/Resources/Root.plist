@@ -64,7 +64,7 @@
 			<key>label</key>
 			<string>云端服务（引擎选「云端」时生效）</string>
 			<key>footerText</key>
-			<string>CosyVoice＝克隆/设计你自己的音色（在微信悬浮球→音色管理里创建）。千问 Qwen-TTS＝官方预置音色，不用克隆、开箱即用，同一个 API Key 通用；音色在微信悬浮球面板里选，更多音色可在下方「千问音色」直接填英文 voice 名。</string>
+			<string>默认已改为「千问 Qwen-TTS」：官方预置音色，不用克隆、开箱即用，同一个 API Key 通用。音色在微信悬浮球面板里选（支持搜索/语速/语气），更多音色可在下方「千问音色」直接填英文 voice 名。CosyVoice＝克隆/设计你自己的音色（需先在悬浮球→音色管理里创建）。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -84,7 +84,7 @@
 				<string>千问 Qwen-TTS</string>
 			</array>
 			<key>default</key>
-			<integer>0</integer>
+			<integer>1</integer>
 			<key>PostNotification</key>
 			<string>com.yzdmm2024.myvoice/settings</string>
 		</dict>

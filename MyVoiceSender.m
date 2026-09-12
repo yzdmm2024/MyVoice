@@ -68,7 +68,10 @@
     [MyVoiceRecorder cancelFeed];
 
     id<MyVoiceEngine> engine = [self engineForMode];
-    NSString *vid = (MVEngineMode() == 1) ? (voiceID.length ? voiceID : MVCurrentVoiceID()) : voiceID;
+    NSString *vid = voiceID;
+    if (!vid.length && MVEngineMode() == 1) {
+        vid = (MVTTSProvider() == 1) ? MVQwenVoice() : MVCurrentVoiceID();
+    }
 
     MVLog(@"合成中 talker=%@ mode=%ld len=%lu", peer, (long)MVEngineMode(), (unsigned long)text.length);
     [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"正在合成（发给 %@）…", peer]];
