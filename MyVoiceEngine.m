@@ -13,6 +13,9 @@
 
 @implementation MyVoiceEngine
 
+// 预览用合成器（抽成文件静态，便于 stopPreview 复用，避免多次 speak 叠加外放）
+static AVSpeechSynthesizer *gMVSyn = nil;
+
 + (double)sampleRate { return MV_WECHAT_SR; }  // 24000，微信语音标准
 
 // 占位音：按字数估算时长（约 4 字/秒，1s~15s），生成 16kHz 单声道 S16 正弦，带包络防爆音。
@@ -53,10 +56,15 @@
     }
     u.rate = AVSpeechUtteranceDefaultSpeechRate;
     u.preUtteranceDelay = 0.1;
-    static AVSpeechSynthesizer *syn;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{ syn = [[AVSpeechSynthesizer alloc] init]; });
-    [syn speakUtterance:u];
+    if (!gMVSyn) gMVSyn = [[AVSpeechSynthesizer alloc] init];
+    [gMVSyn speakUtterance:u];
+}
+
+// 立即停止预览朗读（发送前调用，避免「预览外放」与「录音注入」串音造成重叠）
++ (void)stopPreview {
+    if (gMVSyn) {
+        @try { [gMVSyn stopSpeakingAtBoundary:AVSpeechBoundaryImmediate]; } @catch (NSException *e) {}
+    }
 }
 
 + (NSArray<NSString*>*)availableVoiceIDs {
