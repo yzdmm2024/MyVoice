@@ -12,49 +12,46 @@ extern void MSHookFunction(void *symbol, void *hook, void **old);
 // ============================================================
 
 // 主档 PCM：固定 16kHz(MV_WECHAT_SR) 单声道 S16。
-// 2.2.0 起装填时不再直接重采样到"管线采样率"——微信进程里可能有多个 AudioQueue 录音
-// 队列（语音消息录音器、音色克隆的 AVAudioRecorder、VoIP…），最终由哪个队列消费要等
-// 回调发生才知道，重采样推迟到回调里按消费队列的采样率做一次。
-static NSData   *g_mvFeed        = nil;  // 主档：16k S16
-static BOOL      g_mvArmed       = NO;   // 替换开关
-static NSTimeInterval g_mvArmAt  = 0;    // 装填时刻（用于超时自动取消）
+static NSData    *g_mvFeed    = nil;
 
-// ---- 每队列登记（2.2.0 修复；2.2.4 起偏移也下放到队列）----
-// 旧版只认进程里第一个创建的 AudioQueue 录音回调并永久绑定。如果「音色管理→录音复刻」
-// 的 AVAudioRecorder（24kHz，同样在微信进程里走 AudioQueue）先建队列，登记的采样率和
-// 回调就全错了，真正的「按住说话」录音器反而永远不会被替换 → 发出去的是麦克风原声。
-// 2.2.0 改为每个输入队列独立登记（回调 + 采样率），替换与原回调转发按 inAQ 精确匹配。
-//
-// ★ 2.2.4 修「语音有回音 / 听起来两个声音」：
-//   2.2.0~2.2.3 虽然按队列登记了回调，但**喂入偏移 g_mvOff 是全局共享的一份**。
-//   若同时存在两个输入队列（例如微信语音录音器 + 另一个输入队列/AEC 参考通道），
-//   两个队列的回调会互相抢食同一份 TTS：
-//     · 每次采样率不同就 g_mvOff=0 重来 → 同一段 TTS 被反复从头播放（叠音/回声）；
-//     · 两个队列交替推进偏移 → 每个队列拿到的是被挖空的片段（断续、不自然）。
-//   现在把「已喂偏移 / 重采样副本」都下放到每个队列，各队列各自从 0 完整消费一份 TTS，
-//   互不干扰 → 不会叠音、不会断续。
+// ★ 2.2.5：全局只保留【一份】重采样副本 + 【一份】喂入偏移 —— 单数据流。
+//   2.2.4 的"每队列各自一份完整 TTS"会让两条输入流同时说同一句话 = 叠音/重音。
+static NSData    *g_mvRes     = nil;   // 按绑定队列采样率重采样后的副本（nil = 用主档）
+static double     g_mvResRate = 0;
+static NSUInteger g_mvOff     = 0;     // 已喂字节（相对 g_mvRes / g_mvFeed）
+static BOOL       g_mvArmed   = NO;    // 替换开关
+static BOOL       g_mvFedDone = NO;    // TTS 是否已全部喂进管线
+static NSTimeInterval g_mvArmAt = 0;   // 装填时刻（超时自动取消）
+
+// ---- 队列登记：只用于「把原回调正确转发回去」 ----
+// 微信进程里可能有多个 AudioQueue 录音队列（语音消息录音器、音色克隆的 AVAudioRecorder、
+// VoIP…）。我们登记每一个，回调里按 inAQ 精确匹配拿回它自己的原回调再转发，
+// 避免"把 A 队列的音频喂给 B 队列的回调"这种串台。
 typedef struct {
-    AudioQueueRef           aq;
+    AudioQueueRef           aq;   // NULL = 该队列经由拿不到句柄的入口创建
     AudioQueueInputCallback cb;
     double                  rate;
     UInt32                  ch;
-    NSUInteger              off;          // 本队列已消费的 TTS 字节（相对本队列重采样副本）
-    BOOL                    loggedStart;  // 本队列是否已打过"开始替换"日志
 } MVQueueEntry;
 #define MV_MAX_QUEUES 8
 static MVQueueEntry g_mvQueues[MV_MAX_QUEUES];
 static NSInteger    g_mvQueueCount = 0;
+static AudioQueueInputCallback g_mvLastCb = NULL;   // 兜底转发（登记项匹配不到时用）
 
-// 每个队列专用的重采样副本（与 g_mvQueues 同下标；末位 MV_SLOT_FALLBACK 给未登记队列）
-#define MV_SLOT_FALLBACK MV_MAX_QUEUES
-static MVQueueEntry g_mvFallback;                       // 没登记过的队列走这里（自带一份偏移）
-static NSData  *g_mvQRes[MV_MAX_QUEUES + 1];
-static double   g_mvQResRate[MV_MAX_QUEUES + 1];
+// ---- ★ 2.2.5 精确绑定：本次会话只替换【一个】队列 ----
+// 旧版（2.2.0~2.2.4）只要 armed 就替换"所有"回调上来的队列。若同时存在两个输入队列，
+// 同一段 TTS 会进两条流 → 用户听到的就是"两个声音/重音"。
+// 现在：beginQueueBinding 之后【第一个新建的输入队列】才是本次的替换目标，其它队列原样不动。
+static BOOL          g_mvBindWait   = NO;   // 等待"下一次登记即绑定"
+static BOOL          g_mvBoundSet   = NO;   // 是否已绑定
+static AudioQueueRef g_mvBoundAq    = NULL; // 绑定的队列句柄（NULL = 句柄未知）
+static MVQueueEntry *g_mvBoundEntry = NULL; // 绑定的登记项（句柄未知时用它判等）
+static AudioQueueInputCallback g_mvBoundCb = NULL;
+static double        g_mvBoundRate  = 0;    // 绑定队列申报的采样率
+static BOOL          g_mvRateLogged = NO;
 
-static double     g_mvPipeRate  = 0;     // 最近登记的队列采样率（诊断/日志用）
-static UInt32     g_mvPipeCh    = 0;     // 声道数
-static BOOL       g_mvFmtLogged = NO;
-static NSUInteger g_mvCbSeq     = 0;     // 回调序号（诊断）
+static BOOL       g_mvHooked = NO;
+static NSUInteger g_mvCbSeq  = 0;           // 回调序号（诊断）
 
 static OSStatus (*g_mvOrigAQNewInput)(const AudioStreamBasicDescription*, AudioQueueInputCallback,
                                       void*, CFRunLoopRef, CFStringRef, UInt32, AudioQueueRef*) = NULL;
@@ -62,10 +59,10 @@ static OSStatus (*g_mvOrigAQNewInputDisp)(AudioQueueRef*, const AudioStreamBasic
                                           UInt32, dispatch_queue_t,
                                           AudioQueueInputCallback) = NULL;
 
-static BOOL g_mvHooked = NO;
-
 // 装填后多久没被消费就自动取消（避免一直劫持麦克风）
 static const NSTimeInterval kMVArmTimeout = 120.0;
+// beginQueueBinding 之后给"新队列登记"留的宽限期：超过它才允许"绑到首个回调队列"的兜底
+static const NSTimeInterval kMVBindGrace  = 0.35;
 
 static MVQueueEntry* MVQueueForAQ(AudioQueueRef aq) {
     MVQueueEntry *fallback = NULL;
@@ -75,6 +72,15 @@ static MVQueueEntry* MVQueueForAQ(AudioQueueRef aq) {
         if (g_mvQueues[i].aq == NULL && !fallback) fallback = &g_mvQueues[i];
     }
     return fallback;
+}
+
+// 清空一次装填的全部喂入状态（必须在 @synchronized([NSObject class]) 内调用）
+static void MVResetFeedStateLocked(void) {
+    g_mvRes = nil; g_mvResRate = 0;
+    g_mvOff = 0;
+    g_mvFedDone = NO;
+    g_mvCbSeq = 0;
+    g_mvRateLogged = NO;
 }
 
 #pragma mark - 重采样（S16 单声道，线性插值）
@@ -110,11 +116,11 @@ static NSData* MVResampleS16(NSData *src, double srcRate, double dstRate) {
 
 #pragma mark - 音频回调 trampoline
 
-// 策略（照搬已被验证的「整块填满」）：
+// 策略（与参考实现 TTSFloat v29 v23 版完全一致，实测音质干净）：
 //   每次回调把整块 buffer 用连续的 TTS 字节填满 —— 块内绝不留缝隙。
 //   （曾经的「按实测速率节奏喂」会在 TTS 流与 buffer 流之间产生零填充间隙，
 //     结果每 250ms 插一段静音 = 明显杂音，已废弃。）
-//   TTS 耗尽后整块补零，保持录音会话的节奏直到用户松手。
+//   TTS 耗尽后整块补零（静音），并置 fedDone 供发送方决定 StopRecord 时机。
 static void MV_AQInputTrampoline(void *inUserData, AudioQueueRef inAQ,
                                  AudioQueueBufferRef inBuffer,
                                  const AudioTimeStamp *inStartTime,
@@ -124,63 +130,69 @@ static void MV_AQInputTrampoline(void *inUserData, AudioQueueRef inAQ,
     @autoreleasepool {
         @synchronized([NSObject class]) {
             MVQueueEntry *e = MVQueueForAQ(inAQ);
-            origCb = e ? e->cb : NULL;
-            NSInteger idx;
-            if (e) {
-                idx = (NSInteger)(e - g_mvQueues);
-            } else {
-                // 未登记过的队列：用带独立偏移的兜底槽（千万不能和别的队列共享偏移）
-                g_mvFallback.rate = 0;
-                e = &g_mvFallback;
-                idx = MV_SLOT_FALLBACK;
+            origCb = (e && e->cb) ? e->cb : g_mvLastCb;
+
+            // ---- 判定"这是不是本次要替换的那一个队列" ----
+            BOOL isBound = NO;
+            if (g_mvBoundSet) {
+                isBound = (g_mvBoundAq != NULL) ? (inAQ == g_mvBoundAq)
+                                                : (e != NULL && e == g_mvBoundEntry);
+            } else if (g_mvArmed && g_mvArmAt > 0 &&
+                       [[NSDate date] timeIntervalSince1970] - g_mvArmAt > kMVBindGrace) {
+                // 兜底：启动后没有任何新队列登记（版本差异）→ 宽限期后绑到首个回调队列。
+                // 留这 0.35s 宽限是为了先让"录音器队列的登记"发生，避免误绑到已有队列。
+                g_mvBindWait  = NO;
+                g_mvBoundSet  = YES;
+                g_mvBoundAq   = inAQ;
+                g_mvBoundEntry = e;
+                g_mvBoundCb   = origCb;
+                g_mvBoundRate = e ? e->rate : 0;
+                isBound = YES;
+                MVLog(@"[rec] 启动后未捕获到新队列登记，改绑首个回调队列（%.0fHz）",
+                      g_mvBoundRate);
             }
 
-            if (g_mvArmed && g_mvFeed.length && inBuffer && inBuffer->mAudioData) {
+            if (isBound && g_mvArmed && g_mvFeed.length && inBuffer && inBuffer->mAudioData) {
                 // 超时保护：用户一直不松手/异常情况下别永久劫持麦克风
                 if (g_mvArmAt > 0 && [[NSDate date] timeIntervalSince1970] - g_mvArmAt > kMVArmTimeout) {
                     g_mvArmed = NO;
-                    g_mvFeed = nil;
-                    for (int i = 0; i <= MV_MAX_QUEUES; i++) { g_mvQRes[i] = nil; g_mvQResRate[i] = 0; }
-                    for (NSInteger i = 0; i < g_mvQueueCount; i++) g_mvQueues[i].off = 0;
-                    g_mvFallback.off = 0;
+                    g_mvFeed  = nil;
+                    MVResetFeedStateLocked();
                     MVLogS(@"[rec] 装填超时（%.0fs）自动取消", kMVArmTimeout);
                 } else {
                     g_mvCbSeq++;
 
-                    // 按【本队列】的采样率准备数据；每队列各自一份副本、各自从 0 开始
-                    double rate = (e->rate > 0) ? e->rate : MV_WECHAT_SR;
-                    if (!g_mvQRes[idx].length || g_mvQResRate[idx] != rate) {
+                    // 按【绑定队列】申报的采样率准备数据（整场只做一次）
+                    double rate = (g_mvBoundRate > 0) ? g_mvBoundRate : MV_WECHAT_SR;
+                    if (!g_mvRes.length || g_mvResRate != rate) {
                         NSData *r = MVResampleS16(g_mvFeed, MV_WECHAT_SR, rate);
-                        if (r.length) {
-                            g_mvQRes[idx] = r;
-                            g_mvQResRate[idx] = rate;
-                            e->off = 0;              // 只有"本队列首次准备"才归零
+                        if (r.length) { g_mvRes = r; g_mvResRate = rate; g_mvOff = 0; }
+                        if (!g_mvRateLogged) {
+                            g_mvRateLogged = YES;
+                            MVLog(@"[rec] ▶ 开始替换录音数据（队列 %.0fHz，主档 %lu 字节，喂入 %lu 字节）",
+                                  rate, (unsigned long)g_mvFeed.length,
+                                  (unsigned long)(g_mvRes.length ? g_mvRes.length : g_mvFeed.length));
                         }
                     }
-                    NSData *src = g_mvQRes[idx].length ? g_mvQRes[idx] : (NSData*)g_mvFeed;
-
-                    if (!e->loggedStart) {
-                        e->loggedStart = YES;
-                        // 每次装填每队列只落一次盘：日志里从此能确认「替换真的发生了」
-                        MVLog(@"[rec] ▶ 开始替换录音数据（第 %ld 个队列 %.0fHz，主档 %lu 字节）",
-                              (long)idx, rate, (unsigned long)g_mvFeed.length);
-                    }
+                    NSData *src = g_mvRes.length ? g_mvRes : g_mvFeed;
 
                     UInt32 bufSz = inBuffer->mAudioDataByteSize;
                     if (!bufSz) bufSz = inBuffer->mAudioDataBytesCapacity;
                     NSUInteger total = src.length;
-                    if (bufSz && e->off < total) {
-                        NSUInteger take = MIN((NSUInteger)bufSz, total - e->off);
-                        memcpy(inBuffer->mAudioData, (const char*)src.bytes + e->off, take);
+                    if (bufSz && g_mvOff < total) {
+                        // 整块填满：块内不留间隙（杂音根因就是间隙）
+                        NSUInteger take = MIN((NSUInteger)bufSz, total - g_mvOff);
+                        memcpy(inBuffer->mAudioData, (const char*)src.bytes + g_mvOff, take);
                         if (take < bufSz)
                             memset((char*)inBuffer->mAudioData + take, 0, bufSz - take);
-                        e->off += take;
-                        if (e->off >= total) {
-                            MVLogS(@"[rec] OK 队列#%ld TTS 已全部进入录音管线（%lu 字节）",
-                                   (long)idx, (unsigned long)total);
-                            MVLog(@"[rec] ✅ 队列#%ld TTS 已全部进入录音管线（共 %lu 字节）",
-                                  (long)idx, (unsigned long)total);
-                            g_mvArmAt = 0;   // 已喂完，不必再超时取消
+                        g_mvOff += take;
+                        if (g_mvOff >= total) {
+                            g_mvFedDone = YES;
+                            g_mvArmAt   = 0;   // 已喂完，不必再超时取消
+                            MVLogS(@"[rec] OK TTS 已全部进入录音管线（%lu 字节，%lu 次回调）",
+                                   (unsigned long)total, (unsigned long)g_mvCbSeq);
+                            MVLog(@"[rec] ✅ TTS 已全部进入录音管线（共 %lu 字节，%lu 次回调）",
+                                  (unsigned long)total, (unsigned long)g_mvCbSeq);
                         }
                     } else if (bufSz) {
                         memset(inBuffer->mAudioData, 0, bufSz);   // 尾部静音
@@ -194,66 +206,74 @@ static void MV_AQInputTrampoline(void *inUserData, AudioQueueRef inAQ,
         origCb(inUserData, inAQ, inBuffer, inStartTime, inNumberPacketDescriptions, inPacketDescs);
 }
 
-#pragma mark - 补丁
-
-// 清空一次装填的全部喂入状态（必须在 @synchronized([NSObject class]) 内调用）
-static void MVResetFeedStateLocked(void) {
-    for (int i = 0; i <= MV_MAX_QUEUES; i++) { g_mvQRes[i] = nil; g_mvQResRate[i] = 0; }
-    for (NSInteger i = 0; i < g_mvQueueCount; i++) {
-        g_mvQueues[i].off = 0;
-        g_mvQueues[i].loggedStart = NO;
-    }
-    g_mvFallback.off = 0;
-    g_mvFallback.loggedStart = NO;
-    g_mvCbSeq = 0;
-}
+#pragma mark - 队列登记
 
 // 登记一个新创建的录音输入队列（线程安全；与实时回调共用一把锁）。
 // aq 允许为 NULL：表示经由拿不到队列句柄的入口创建（见 dispatch 入口），作回退匹配的占位项。
-static void MVRegisterQueue(AudioQueueRef aq, AudioQueueInputCallback cb,
-                            const AudioStreamBasicDescription *fmt) {
-    if (!cb) return;
+static MVQueueEntry* MVRegisterQueue(AudioQueueRef aq, AudioQueueInputCallback cb,
+                                     const AudioStreamBasicDescription *fmt) {
+    if (!cb) return NULL;
     double rate = fmt ? fmt->mSampleRate : 0;
     UInt32  ch  = fmt ? fmt->mChannelsPerFrame : 0;
+    MVQueueEntry *ret = NULL;
+    BOOL newlyBound = NO;
+
     @synchronized([NSObject class]) {
+        g_mvLastCb = cb;
+
         for (NSInteger i = 0; i < g_mvQueueCount; i++) {
             if (g_mvQueues[i].aq == aq) {   // 同一队列重复创建（罕见）只刷新登记
                 g_mvQueues[i].cb = cb; g_mvQueues[i].rate = rate; g_mvQueues[i].ch = ch;
-                g_mvQueues[i].off = 0; g_mvQueues[i].loggedStart = NO;
-                g_mvQRes[i] = nil; g_mvQResRate[i] = 0;
-                return;
+                ret = &g_mvQueues[i];
+                break;
             }
         }
-        NSInteger slot;
-        if (g_mvQueueCount < MV_MAX_QUEUES) {
-            slot = g_mvQueueCount++;
-        } else {
-            slot = MV_MAX_QUEUES - 1;       // 满了覆盖最后一个（实际场景远到不了 8 个）
-            MVLog(@"[rec] 队列表已满，覆盖旧登记");
+        if (!ret) {
+            NSInteger slot;
+            if (g_mvQueueCount < MV_MAX_QUEUES) {
+                slot = g_mvQueueCount++;
+            } else {
+                slot = MV_MAX_QUEUES - 1;       // 满了覆盖最后一个（实际场景远到不了 8 个）
+                MVLog(@"[rec] 队列表已满，覆盖旧登记");
+            }
+            g_mvQueues[slot].aq = aq; g_mvQueues[slot].cb = cb;
+            g_mvQueues[slot].rate = rate; g_mvQueues[slot].ch = ch;
+            ret = &g_mvQueues[slot];
         }
-        g_mvQueues[slot].aq = aq; g_mvQueues[slot].cb = cb;
-        g_mvQueues[slot].rate = rate; g_mvQueues[slot].ch = ch;
-        g_mvQueues[slot].off = 0; g_mvQueues[slot].loggedStart = NO;
-        g_mvQRes[slot] = nil; g_mvQResRate[slot] = 0;
+
+        // ★ 精确绑定：beginQueueBinding 之后第一个登记的队列 = 本次要替换的队列
+        if (g_mvBindWait && !g_mvBoundSet) {
+            g_mvBindWait   = NO;
+            g_mvBoundSet   = YES;
+            g_mvBoundAq    = aq;
+            g_mvBoundEntry = ret;
+            g_mvBoundCb    = cb;
+            g_mvBoundRate  = rate;
+            newlyBound     = YES;
+        }
     }
-    MVLog(@"[rec] 已接管录音队列（第 %ld 个）@%.0fHz %uch", g_mvQueueCount, rate, ch);
+
+    MVLog(@"[rec] 已登记录音队列（第 %ld 个）@%.0fHz %uch%@",
+          (long)g_mvQueueCount, rate, ch, newlyBound ? @" ← 本次替换目标" : @"");
+    return ret;
 }
 
 static void MVMakePipelineRateKnown(const AudioStreamBasicDescription *fmt) {
     if (!fmt) return;
-    g_mvPipeRate = fmt->mSampleRate;
-    g_mvPipeCh   = fmt->mChannelsPerFrame;
-    if (!g_mvFmtLogged) {
-        g_mvFmtLogged = YES;
+    static BOOL logged = NO;
+    if (!logged) {
+        logged = YES;
         char fcode[5] = { (char)((fmt->mFormatID >> 24) & 0xFF),
                           (char)((fmt->mFormatID >> 16) & 0xFF),
                           (char)((fmt->mFormatID >> 8)  & 0xFF),
                           (char)( fmt->mFormatID        & 0xFF), 0 };
-        MVLog(@"[rec] 录音管线格式：%.0fHz %uch fmt=%s bits=%u bytes/pkt=%u",
+        MVLog(@"[rec] 录音管线申请格式：%.0fHz %uch fmt=%s bits=%u bytes/pkt=%u",
               fmt->mSampleRate, (unsigned)fmt->mChannelsPerFrame, fcode,
-              (unsigned)fmt->mBitsPerChannel, (unsigned)fmt->mBytesPerPacket);
+              (unsigned)fmt->mBitsPerChannel, fmt->mBytesPerPacket);
     }
 }
+
+#pragma mark - 补丁
 
 static OSStatus MV_AudioQueueNewInput(const AudioStreamBasicDescription *inFormat,
                                       AudioQueueInputCallback inCallbackProc,
@@ -320,6 +340,18 @@ static OSStatus MV_AudioQueueNewInputWithDispatchQueue(AudioQueueRef *outAQ,
     });
 }
 
++ (void)beginQueueBinding {
+    @synchronized([NSObject class]) {
+        g_mvBindWait   = YES;
+        g_mvBoundSet   = NO;
+        g_mvBoundAq    = NULL;
+        g_mvBoundEntry = NULL;
+        g_mvBoundCb    = NULL;
+        g_mvBoundRate  = 0;
+    }
+    MVLog(@"[rec] 已进入「等待新队列」状态：下一个新建的录音队列将被精确绑定");
+}
+
 + (NSUInteger)feedPCM:(NSData*)pcm srcRate:(double)srcRate {
     if (pcm.length < 320) {                 // 小于 10ms@16k 视为无效
         MVLog(@"[rec] 装填失败：PCM 太短（%lu 字节）", (unsigned long)pcm.length);
@@ -327,8 +359,7 @@ static OSStatus MV_AudioQueueNewInputWithDispatchQueue(AudioQueueRef *outAQ,
     }
     if (!g_mvHooked) [self install];
 
-    // 主档统一 16kHz；具体由哪个录音队列消费、其采样率多少，回调发生时才知道，
-    // 届时在 trampoline 里按队列采样率做一次性重采样（见 MV_AQInputTrampoline）。
+    // 主档统一 16kHz；消费队列的采样率在"绑定"时才知道，届时做一次性重采样。
     double dstRate = MV_WECHAT_SR;
     NSData *feed = MVResampleS16(pcm, srcRate > 0 ? srcRate : dstRate, dstRate);
     if (!feed.length) {
@@ -339,8 +370,15 @@ static OSStatus MV_AudioQueueNewInputWithDispatchQueue(AudioQueueRef *outAQ,
     @synchronized([NSObject class]) {
         g_mvFeed  = feed;
         g_mvArmed = YES;
+        // 绑定状态随每次装填重置：必须由发送方在"调启动方法前"重新 beginQueueBinding
+        g_mvBindWait   = NO;
+        g_mvBoundSet   = NO;
+        g_mvBoundAq    = NULL;
+        g_mvBoundEntry = NULL;
+        g_mvBoundCb    = NULL;
+        g_mvBoundRate  = 0;
         g_mvArmAt = [[NSDate date] timeIntervalSince1970];
-        MVResetFeedStateLocked();          // 每队列偏移/重采样副本全部作废，各自从 0 开始
+        MVResetFeedStateLocked();
     }
     NSUInteger ms = feed.length * 1000 / (NSUInteger)(dstRate * 2);
     MVLog(@"[rec] 装填主档 %lu 字节 ≈ %lums @16kHz（原 %.0fHz / %lu 字节）— 等待发送",
@@ -353,9 +391,30 @@ static OSStatus MV_AudioQueueNewInputWithDispatchQueue(AudioQueueRef *outAQ,
         g_mvArmed = NO;
         g_mvFeed  = nil;
         g_mvArmAt = 0;
+        g_mvBindWait = NO;
         MVResetFeedStateLocked();
     }
     MVLog(@"[rec] 已取消装填");
+}
+
++ (void)resetAfterSend:(NSTimeInterval)delay {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(0.0, delay) * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        @synchronized([NSObject class]) {
+            if (!g_mvArmed) return;      // 已被新一轮装填接管 → 不要误清
+            g_mvArmed  = NO;
+            g_mvFeed   = nil;
+            g_mvArmAt  = 0;
+            g_mvBindWait   = NO;
+            g_mvBoundSet   = NO;
+            g_mvBoundAq    = NULL;
+            g_mvBoundEntry = NULL;
+            g_mvBoundCb    = NULL;
+            g_mvBoundRate  = 0;
+            MVResetFeedStateLocked();
+        }
+        MVLog(@"[rec] 发送收尾：已解除装填（后续录音不受影响）");
+    });
 }
 
 + (BOOL)isArmed {
@@ -366,27 +425,25 @@ static OSStatus MV_AudioQueueNewInputWithDispatchQueue(AudioQueueRef *outAQ,
 
 + (NSUInteger)fedBytes {
     NSUInteger v = 0;
-    @synchronized([NSObject class]) {
-        for (NSInteger i = 0; i < g_mvQueueCount; i++)
-            if (g_mvQueues[i].off > v) v = g_mvQueues[i].off;
-        if (g_mvFallback.off > v) v = g_mvFallback.off;
-    }
+    @synchronized([NSObject class]) { v = g_mvOff; }
     return v;
 }
 
 + (NSUInteger)totalBytes {
     NSUInteger v = 0;
-    @synchronized([NSObject class]) {
-        for (int i = 0; i <= MV_MAX_QUEUES; i++)
-            if (g_mvQRes[i].length > v) v = g_mvQRes[i].length;
-        if (!v) v = g_mvFeed.length;
-    }
+    @synchronized([NSObject class]) { v = g_mvRes.length ? g_mvRes.length : g_mvFeed.length; }
+    return v;
+}
+
++ (BOOL)fedDone {
+    BOOL v = NO;
+    @synchronized([NSObject class]) { v = g_mvFedDone; }
     return v;
 }
 
 + (double)pipelineRate {
     double v = 0;
-    @synchronized([NSObject class]) { v = g_mvPipeRate; }
+    @synchronized([NSObject class]) { v = g_mvBoundRate; }
     return v;
 }
 
@@ -394,15 +451,19 @@ static OSStatus MV_AudioQueueNewInputWithDispatchQueue(AudioQueueRef *outAQ,
     NSMutableString *s = [NSMutableString string];
     @synchronized([NSObject class]) {
         [s appendFormat:@"AudioQueue hook：%@\n", g_mvHooked ? @"已安装 ✅" : @"未安装 ❌"];
-        [s appendFormat:@"已接管录音队列：%ld 个\n", g_mvQueueCount];
+        [s appendFormat:@"已登记录音队列：%ld 个\n", (long)g_mvQueueCount];
         for (NSInteger i = 0; i < g_mvQueueCount; i++)
-            [s appendFormat:@"  · 队列#%ld @%.0fHz %uch 已喂 %lu 字节%@\n", i, g_mvQueues[i].rate,
-                g_mvQueues[i].ch, (unsigned long)g_mvQueues[i].off,
-                g_mvQueues[i].aq ? @"" : @"（入口句柄未知，按回退匹配）"];
-        [s appendFormat:@"待发送装填：%@（%lu/%lu 字节）\n",
+            [s appendFormat:@"  · 队列#%ld @%.0fHz %uch%@\n", (long)i, g_mvQueues[i].rate,
+                g_mvQueues[i].ch,
+                (g_mvBoundSet && &g_mvQueues[i] == g_mvBoundEntry) ? @" ← 本次替换目标" :
+                    (g_mvQueues[i].aq ? @"" : @"（入口句柄未知）")];
+        [s appendFormat:@"本次绑定：%@（%.0fHz）\n",
+            g_mvBoundSet ? (g_mvBoundAq ? @"已绑定句柄 ✅" : @"已绑定(句柄未知) ✅") : @"尚未绑定",
+            g_mvBoundRate];
+        [s appendFormat:@"待发送装填：%@（%lu/%lu 字节，喂完=%@）\n",
             g_mvArmed ? @"就绪，等待发送" : @"无",
-            (unsigned long)[self fedBytes],
-            (unsigned long)[self totalBytes]];
+            (unsigned long)g_mvOff, (unsigned long)[self totalBytes],
+            g_mvFedDone ? @"是" : @"否"];
     }
     [s appendFormat:@"日志文件：%@", MVLogFilePath() ?: @"(不可写)"];
     return s;

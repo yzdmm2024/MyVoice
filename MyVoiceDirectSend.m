@@ -293,33 +293,46 @@ static id gAS = nil;      // AudioSender
     MVLog(@"[direct] 直发开始：%@ -%@  (talker=%@, me=%@)",
           NSStringFromClass(object_getClass(target)), startSel, talker, me.length ? me : @"?");
 
+    // ★ 2.2.5：先声明「接下来新建的录音队列才是本次替换目标」，再调启动方法。
+    //   顺序不能反 —— 队列是启动方法内部创建的，先声明才能精确绑定；
+    //   不绑定的话，同时存在的第二个输入队列也会被喂同一段 TTS → 两个声音/重音。
+    [MyVoiceRecorder beginQueueBinding];
+
     MVInvoke(target, startSel, @[me, talker ?: @"", [NSNull null]]);
 
-    // ---- 轮询确认"录音真的起来了"（判定标准：注入真的被消费，即 fedBytes>0） ----
-    // 用重复 NSTimer 而非递归 block：block 里只引用参数 t，不引用外部 timer 变量，
-    // 因此不会形成 block↔timer 的保留环（递归 block 会被 clang 报 retain cycle）。
-    __block NSInteger tries = 0;
+    // ---- 轮询：等「TTS 真正喂完」（fedDone）再松手 ----
+    // 参考实现（TTSFloat v29）铁证：按【预估时长】定时 Stop 会截断数据 →
+    // 微信一直在等完整音频 → 转圈/半截语音/好久不出来。
+    // 这里改成等 fedDone（与真实喂入字节数挂钩，和采样率无关），再留 0.35s 让最后一块落地。
+    double est = MAX(0.6, seconds);
+    NSInteger capMs = (NSInteger)(MAX(8.0, est * 3.0 + 3.0) * 1000.0);   // 硬上限，防卡死
+    __block NSInteger waited = 0;
     [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES block:^(NSTimer *t){
-        tries++;
-        if ([MyVoiceRecorder fedBytes] > 0) {
-            [t invalidate];
-            double hold = MAX(0.6, seconds + 0.45);      // TTS 时长 + 收尾
-            MVLog(@"[direct] ✅ 录音已接管，%.1fs 后自动停止并发送", hold);
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(hold * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{
-                NSString *used = [MyVoiceDirectSend stopWith:stopTarget sender:stopIsSender fallbackRC:rc];
-                MVLog(@"[direct] ✅ 已调用停止/发送：%@（微信自行完成 SILK 编码/入库/上传/气泡）", used);
-                fin(YES, nil);
-            });
-            return;
-        }
-        if (tries >= 12) {                               // ≈1.2s 还没接管 → 判定失败
+        waited += 100;
+        BOOL started = ([MyVoiceRecorder fedBytes] > 0);
+        BOOL done    = [MyVoiceRecorder fedDone];
+
+        if (!started && !done && waited >= 1200) {      // ≈1.2s 还没接管 → 判定失败
             [t invalidate];
             MVLog(@"[direct] ❌ 1.2s 内录音未被接管，取消直发（不会残留录音）");
             [MyVoiceRecorder cancelFeed];
             [MyVoiceDirectSend cancelWith:stopTarget sender:stopIsSender fallbackRC:rc];
             fin(NO, @"微信内部录音未按预期启动（版本接口可能不同）");
             return;
+        }
+        if (done || (started && waited >= capMs)) {
+            [t invalidate];
+            MVLog(@"[direct] ✅ TTS 已喂完（%ldms，%lu/%lu 字节），0.35s 后停止并发送",
+                  (long)waited, (unsigned long)[MyVoiceRecorder fedBytes],
+                  (unsigned long)[MyVoiceRecorder totalBytes]);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                NSString *used = [MyVoiceDirectSend stopWith:stopTarget sender:stopIsSender fallbackRC:rc];
+                MVLog(@"[direct] ✅ 已调用停止/发送：%@（微信自行完成 SILK 编码/入库/上传/气泡）", used);
+                // 收尾：2.5s 后解除装填，避免残留状态把后续真实录音注成静音
+                [MyVoiceRecorder resetAfterSend:2.5];
+                fin(YES, nil);
+            });
         }
     }];
 }

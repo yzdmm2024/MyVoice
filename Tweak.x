@@ -50,7 +50,7 @@
 
 %ctor {
     @autoreleasepool {
-        MVLog(@"载入 我的语音 v2.2.4（自动发送＝无界面直发：不再模拟按住说话；修复多队列抢食导致的叠音/回音）");
+        MVLog(@"载入 我的语音 v2.2.5（等 TTS 喂完再松手 + 单一数据流/精确绑定单队列：修延迟与重音）");
         MVLog(@"日志文件：%@", MVLogFilePath() ?: @"(不可写，只能用 syslog)");
         [[MyVoiceManager shared] setup];
 
