@@ -14,6 +14,8 @@
 + (NSData*)placeholderPCM:(NSString*)text;
 // 用系统 AVSpeechSynthesizer 播放预览（自然音色，仅试听，不直接产出 PCM）。
 + (void)previewText:(NSString*)text voiceID:(NSString*)voiceID;
+// 立即停止预览朗读（发送前调用，避免预览外放与录音注入串音）。
++ (void)stopPreview;
 // 系统可用音色列表（用于面板选择）。
 + (NSArray<NSString*>*)availableVoiceIDs;
 // 采样率（PCM 消费端据此喂数据）。
