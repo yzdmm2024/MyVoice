@@ -207,16 +207,26 @@ static NSTimeInterval _mvCapturedAt = 0; // 捕获时间（30 分钟内有效）
 //   为什么必须有：object_getClass 对「已释放且内存已被复用」的对象会在 libobjc 的
 //   _objc_opt_class 里触发断言 → SIGTRAP(EXC_BREAKPOINT)。这**不是** NSException，
 //   @try/@catch 完全抓不住，进程直接死 —— 2.2.8 的闪退栈顶正是 object_getClass。
-//   这里做零成本粗筛：未按 8 字节对齐 / isa 为空或未对齐 的指针直接否掉；
-//   tagged pointer（NSNumber/NSDate 等）永远是合法对象，直接放行。
+//
+// ★★ 2.3.2 致命修复：旧判据「isa 未对齐 → 脏指针」是错的，后果是把【所有正常对象】
+//   全部拒掉 → isChatVC: 永远 NO → 从 2.2.9 起整个插件的聊天页识别全部失效
+//   （这就是用户一直「未识别到聊天对象」的真正根因）。
+//   frida 实测（iPhone 12 Pro / iOS 16.6 / 微信 8.0.75.33）：聊天页 BaseMsgContentViewController
+//   的原始 isa 字 = 0x400000176a07067，低 3 位 = 0b111 —— arm64 的对象全部使用
+//   【非指针 isa（nonpointer isa）】，isa 字的最低 3 位是 nonpointer / has_assoc /
+//   has_cxx_dtor 三个标志位，根本不是对齐位！
+//   正确判据：① 对象地址必须 8 字节对齐（这条保留）；② 读出 isa 字后，
+//   bit0=1 → 非指针 isa（正常堆对象）直接放行；bit0=0 → 老式指针 isa，
+//   才检查非空与对齐；tagged pointer 提前放行。
 static BOOL MVLooksLikeObject(id o) {
     if (!o) return NO;
     uintptr_t p = (uintptr_t)o;
     if (p & 0x7UL) return NO;                    // 未按指针宽度对齐 → 绝不可能是对象
     if (p & (1UL << 63)) return YES;             // tagged pointer → 合法
     uintptr_t isa = *(volatile uintptr_t *)p;    // 直接读 isa，绕开 objc 的断言路径
+    if (isa & 1UL) return YES;                   // ★ bit0=1 → 非指针 isa，正常堆对象
     if (isa == 0) return NO;
-    if (isa & 0x7UL) return NO;                  // isa 未对齐 → 内存已被复用写脏
+    if (isa & 0x7UL) return NO;                  // 老式指针 isa 才要求对齐
     return YES;
 }
 

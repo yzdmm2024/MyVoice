@@ -70,7 +70,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.3.1（聊天页识别兜底：严格→模糊匹配，失败落 VC 树日志）");
+        MVLog(@"载入 我的语音 v2.3.2（致命修复：指针闸门误杀非指针 isa 对象导致全部识别失效）");
         MVLog(@"日志文件：%@", MVLogFilePath() ?: @"(不可写，只能用 syslog)");
     }
 
