@@ -67,6 +67,15 @@
     // 上一次还没被消费的装填先清掉，避免串台
     [MyVoiceRecorder cancelFeed];
 
+    // 云端模式但没填 API Key：直接明确报错，别回退到本地 AVS 报一段看不懂的错。
+    // 千问虽免克隆，但仍需要一个阿里云百炼(DashScope)的 API Key。
+    if (MVEngineMode() == 1 && MVAPIKey().length == 0) {
+        MVLog(@"合成失败：云端模式但未配置 API Key");
+        MVOnMain(^{ [[MyVoiceManager shared] toast:
+            @"❌ 未配置 API Key\n请到 设置→我的语音 填写阿里云百炼(DashScope) Key\n（千问 Qwen-TTS 有免费额度，填了就能用，无需下载任何语音）"]; });
+        return;
+    }
+
     id<MyVoiceEngine> engine = [self engineForMode];
     NSString *vid = voiceID;
     if (!vid.length && MVEngineMode() == 1) {

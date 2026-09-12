@@ -48,6 +48,18 @@
     // 丢到后台线程跑，避免阻塞调用方。
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
         @autoreleasepool {
+            // 预检：设备是否真有可用的中文语音。没有就直接报错，避免 writeUtterance 静默无输出
+            // （这正是用户遇到「AVS无输出」的根因：手机没下载中文语音）。
+            BOOL hasZh = NO;
+            for (AVSpeechSynthesisVoice *v in [AVSpeechSynthesisVoice speechVoices]) {
+                if ([v.language hasPrefix:@"zh"]) { hasZh = YES; break; }
+            }
+            if (!hasZh) {
+                if (completion) completion(nil, [NSError errorWithDomain:@"MyVoiceAVS" code:3
+                    userInfo:@{NSLocalizedDescriptionKey:
+                        @"设备未下载中文语音（AVS 无法合成）。两种办法：① 设置→辅助功能→语音内容→声音→中文(中国)，下载任一语音后再试；② 改用云端：设置→我的语音 填 DashScope API Key（千问免费，无需下载语音）"}]);
+                return;
+            }
             AVSpeechUtterance *u = [AVSpeechUtterance speechUtteranceWithString:text];
             if (voiceID.length) {
                 AVSpeechSynthesisVoice *v = [AVSpeechSynthesisVoice voiceWithIdentifier:voiceID];
@@ -89,7 +101,8 @@
 
             if (!gotAny || totalFrames == 0) {
                 if (completion) completion(nil, [NSError errorWithDomain:@"MyVoiceAVS" code:1
-                                    userInfo:@{NSLocalizedDescriptionKey:@"AVS 无输出（设备可能缺 zh-CN 语音，请在 设置-辅助功能-语音内容 中下载）"}]);
+                                    userInfo:@{NSLocalizedDescriptionKey:
+                                        @"AVS 无输出（设备中文语音可能未下载完整）。请到 设置→辅助功能→语音内容 确认中文语音已下载；或改用云端千问：设置→我的语音 填 DashScope API Key"}]);
                 return;
             }
 
