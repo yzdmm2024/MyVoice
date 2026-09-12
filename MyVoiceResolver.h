@@ -20,6 +20,10 @@
 // 当前聊天对象 wxid（多路径解析，见 .m 里的优先级注释）
 + (NSString*)currentTalker;
 + (UIViewController*)topViewController;
+// 遍历当前所有可见 VC（含子/模态），用于定位聊天页与「按住说话」按钮
++ (NSArray<UIViewController*>*)allViewControllers;
+// 判定某个 VC 是不是聊天页（类名含 MsgContent）
++ (BOOL)isChatVC:(id)vc;
 // 自己的 wxid（构造语音消息的 m_nsFromUsr；带缓存 + 落共享配置）
 + (NSString*)selfWxid;
 // 微信自己发消息时 AddMsg:MsgWrap: 用的第一个参数（hook 捕获，直发复用；可能为 nil）
