@@ -1,0 +1,362 @@
+#import "MyVoiceDirectSend.h"
+#import "MyVoiceCommon.h"
+#import "MyVoiceResolver.h"
+#import "MyVoiceRecorder.h"
+#import <UIKit/UIKit.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
+
+// 私有声明：保证「后面定义、前面调用」不会触发
+// "no known class method for selector"（这个在 ObjC 里是**错误**，不是警告）。
+@interface MyVoiceDirectSend ()
++ (NSArray<NSString*>*)recordControllerNames;
++ (NSArray<NSString*>*)audioSenderNames;
++ (id)locate:(NSArray<NSString*>*)names;
++ (id)recordController;
++ (id)audioSender;
++ (NSString*)stopWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc;
++ (void)cancelWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc;
+@end
+
+// ============================================================
+// 1) 通用调用：按【运行时方法签名】构造 NSInvocation
+//
+//    为什么不用 objc_msgSend 强转：微信内部方法的参数类型/个数不确定
+//    （StopRecordingInternal: 到底吃 BOOL 还是 id 无从得知），强转一旦猜错就是
+//    ABI 不匹配 → 崩溃。用 NSMethodSignature + NSInvocation 按真实类型填参数，
+//    猜不到的参数一律填 0/nil，最坏情况是"没生效"，不会崩。
+// ============================================================
+static id MVInvoke(id obj, NSString *selName, NSArray *args) {
+    if (!obj || !selName.length) return nil;
+    SEL sel = NSSelectorFromString(selName);
+    if (!sel || ![obj respondsToSelector:sel]) return nil;
+    @try {
+        NSMethodSignature *sig = [obj methodSignatureForSelector:sel];
+        if (!sig) return nil;
+        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+        inv.target = obj;
+        inv.selector = sel;
+
+        NSUInteger n = sig.numberOfArguments;
+        for (NSUInteger i = 2; i < n; i++) {
+            const char *t = [sig getArgumentTypeAtIndex:i];
+            if (!t || !t[0]) continue;
+            NSUInteger ai = i - 2;
+            id a = (args && ai < args.count) ? args[ai] : nil;
+            BOOL hasVal = a && ![a isKindOfClass:[NSNull class]];
+
+            if (t[0] == '@' || t[0] == '#') {
+                id v = hasVal ? a : nil;
+                [inv setArgument:&v atIndex:i];
+            } else if (hasVal && (t[0]=='c'||t[0]=='s'||t[0]=='i'||t[0]=='l'||t[0]=='q'||
+                                  t[0]=='C'||t[0]=='S'||t[0]=='I'||t[0]=='L'||t[0]=='Q'||t[0]=='B')) {
+                long long v = [a longLongValue];
+                NSUInteger sz = 0; NSGetSizeAndAlignment(t, &sz, NULL);
+                unsigned char buf[16]; memset(buf, 0, sizeof(buf));
+                memcpy(buf, &v, MIN(sz, sizeof(buf)));
+                [inv setArgument:buf atIndex:i];
+            } else if (hasVal && t[0] == 'd') {
+                double v = [a doubleValue]; [inv setArgument:&v atIndex:i];
+            } else if (hasVal && t[0] == 'f') {
+                float v = [a floatValue]; [inv setArgument:&v atIndex:i];
+            } else {
+                // 猜不到的（或没给值的）→ 零填充
+                NSUInteger sz = 0; NSGetSizeAndAlignment(t, &sz, NULL);
+                if (sz > 0 && sz <= 16) {
+                    unsigned char buf[16]; memset(buf, 0, sizeof(buf));
+                    [inv setArgument:buf atIndex:i];
+                }
+            }
+        }
+        [inv invoke];
+
+        const char *rt = sig.methodReturnType;
+        if (rt && (rt[0] == '@' || rt[0] == '#') && sig.methodReturnLength <= sizeof(void*)) {
+            id ret = nil; [inv getReturnValue:&ret]; return ret;
+        }
+    } @catch (NSException *e) {
+        MVLog(@"[direct] 调用 -%@ 抛异常：%@", selName, e.reason);
+    }
+    return nil;
+}
+
+@implementation MyVoiceDirectSend
+
++ (instancetype)shared {
+    static id s; static dispatch_once_t t; dispatch_once(&t, ^{ s = [[self alloc] init]; });
+    return s;
+}
+
+#pragma mark - 类名候选（版本自适应）
+
++ (NSArray<NSString*>*)recordControllerNames {
+    return @[@"RecordController", @"VoiceRecordController", @"AudioRecordController",
+             @"MMAudioRecordController", @"ChatRecordController"];
+}
++ (NSArray<NSString*>*)audioSenderNames {
+    return @[@"AudioSender", @"VoiceSender", @"BaseAudioSender", @"MMAudioSender"];
+}
+
+static BOOL MVClassMatches(Class c, NSArray *names) {
+    int d = 0;
+    while (c && d++ < 6) {
+        NSString *n = NSStringFromClass(c);
+        if (n && [names containsObject:n]) return YES;
+        c = class_getSuperclass(c);
+    }
+    return NO;
+}
+
+// 在对象自身 + 父类的 ivar 里找「类名命中 names」的对象（只下钻"名字看着相关"的字段）
+static id MVFindInGraph(id obj, NSArray *names, int depth, int *guard) {
+    if (!obj || depth > 2 || !guard) return nil;
+    if ((*guard)++ > 3000) return nil;
+
+    Class root = object_getClass(obj);
+    NSString *cn = NSStringFromClass(root) ?: @"";
+    if ([cn hasPrefix:@"NS"] || [cn hasPrefix:@"UI"] || [cn hasPrefix:@"CA"] ||
+        [cn hasPrefix:@"_"] || [cn hasPrefix:@"CF"] || [cn hasPrefix:@"Swift"]) return nil;
+
+    @try {
+        Class c = root; int lvl = 0;
+        while (c && lvl < 6) {
+            unsigned int cnt = 0;
+            Ivar *ivs = class_copyIvarList(c, &cnt);
+            if (ivs) {
+                for (unsigned int i = 0; i < cnt; i++) {
+                    const char *te = ivar_getTypeEncoding(ivs[i]);
+                    if (!te || te[0] != '@') continue;      // 只看对象型字段
+                    const char *nm = ivar_getName(ivs[i]);
+                    id v = nil;
+                    @try { v = object_getIvar(obj, ivs[i]); } @catch (NSException *e) { v = nil; }
+                    if (!v) continue;
+                    if (MVClassMatches(object_getClass(v), names)) { free(ivs); return v; }
+
+                    if (depth < 2) {
+                        NSString *ivn = nm ? [NSString stringWithUTF8String:nm] : @"";
+                        BOOL interesting =
+                            ([ivn rangeOfString:@"record" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                             [ivn rangeOfString:@"audio"  options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                             [ivn rangeOfString:@"sender" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                             [ivn rangeOfString:@"voice"  options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                             [ivn rangeOfString:@"delegate" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                             [ivn rangeOfString:@"logic" options:NSCaseInsensitiveSearch].location != NSNotFound);
+                        if (interesting) {
+                            id r = MVFindInGraph(v, names, depth + 1, guard);
+                            if (r) { free(ivs); return r; }
+                        }
+                    }
+                }
+                free(ivs);
+            }
+            c = class_getSuperclass(c); lvl++;
+        }
+    } @catch (NSException *e) { }
+    return nil;
+}
+
+// 从聊天页（及其 m_delegate / 逻辑控制器）里捞微信内部录音相关实例
++ (id)locate:(NSArray<NSString*>*)names {
+    // ① 聊天页自身 + 它的逻辑控制器
+    NSArray *vcList = nil;
+    @try { vcList = [MyVoiceResolver allViewControllers]; } @catch (NSException *e) { vcList = nil; }
+    for (UIViewController *vc in vcList) {
+        @try {
+            if (![MyVoiceResolver isChatVC:vc]) continue;
+            int g = 0;
+            id r = MVFindInGraph(vc, names, 0, &g);
+            if (r) return r;
+            id dg = [MyVoiceResolver valueForIvars:vc names:@[@"m_delegate", @"m_logicController",
+                                                              @"m_oLogicController", @"logicController",
+                                                              @"m_delegateController"]];
+            if (dg) {
+                int g2 = 0;
+                r = MVFindInGraph(dg, names, 0, &g2);
+                if (r) return r;
+                // 有些版本直接挂在具名字段上（ivar 名不含 record/audio 关键字时靠这条兜住）
+                for (NSString *k in @[@"m_recordController", @"recordController", @"m_oRecordController",
+                                      @"m_audioSender", @"audioSender", @"m_recordSender"]) {
+                    id v = [MyVoiceResolver valueForIvars:dg names:@[k]];
+                    if (v && MVClassMatches(object_getClass(v), names)) return v;
+                }
+            }
+        } @catch (NSException *e) { }
+    }
+    // ② 服务容器兜底（部分版本 RecordController 是 service）
+    for (NSString *n in names) {
+        id s = MVService(n);
+        if (s && MVClassMatches(object_getClass(s), names)) return s;
+    }
+    return nil;
+}
+
+static id gRC = nil;      // RecordController
+static id gAS = nil;      // AudioSender
+
++ (id)recordController {
+    if (gRC) return gRC;
+    gRC = [self locate:[self recordControllerNames]];
+    if (gRC) MVLog(@"[direct] 找到 RecordController = %@", NSStringFromClass(object_getClass(gRC)));
+    return gRC;
+}
+
++ (id)audioSender {
+    if (gAS) return gAS;
+    id rc = [self recordController];       // 优先从 RecordController 内部拿配套 sender
+    if (rc) {
+        int g = 0;
+        gAS = MVFindInGraph(rc, [self audioSenderNames], 0, &g);
+        if (!gAS) {
+            for (NSString *k in @[@"m_audioSender", @"audioSender", @"m_sender", @"sender",
+                                  @"m_recordSender", @"m_oAudioSender"]) {
+                id v = [MyVoiceResolver valueForIvars:rc names:@[k]];
+                if (v && MVClassMatches(object_getClass(v), [self audioSenderNames])) { gAS = v; break; }
+            }
+        }
+    }
+    if (!gAS) gAS = [self locate:[self audioSenderNames]];
+    if (gAS) MVLog(@"[direct] 找到 AudioSender = %@", NSStringFromClass(object_getClass(gAS)));
+    return gAS;
+}
+
+#pragma mark - 可用性 / 诊断
+
++ (BOOL)available {
+    if ([NSThread isMainThread]) return ([self recordController] != nil || [self audioSender] != nil);
+    __block BOOL ok = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        ok = ([self recordController] != nil || [self audioSender] != nil);
+    });
+    return ok;
+}
+
++ (NSString*)diag {
+    NSMutableString *s = [NSMutableString string];
+    id rc = [self recordController], as = [self audioSender];
+    [s appendFormat:@"RecordController：%@\n", rc ? NSStringFromClass(object_getClass(rc)) : @"未找到 ❌"];
+    if (rc) {
+        [s appendFormat:@"  可开录音：%@\n", [rc respondsToSelector:NSSelectorFromString(@"StartRecordingFromUsr:ToUsr:UserInfo:")] ? @"是 ✅" : @"否"];
+        [s appendFormat:@"  可停录音：%@\n", [rc respondsToSelector:NSSelectorFromString(@"StopRecordingInternal:")] ? @"是 ✅" : @"否"];
+    }
+    [s appendFormat:@"AudioSender：%@\n", as ? NSStringFromClass(object_getClass(as)) : @"未找到"];
+    if (as) {
+        [s appendFormat:@"  StartRecordFrom:ToUser:UserInfo: = %@\n",
+            [as respondsToSelector:NSSelectorFromString(@"StartRecordFrom:ToUser:UserInfo:")] ? @"有 ✅" : @"无"];
+        [s appendFormat:@"  StopRecord = %@\n",
+            [as respondsToSelector:NSSelectorFromString(@"StopRecord")] ? @"有 ✅" : @"无"];
+    }
+    return s;
+}
+
+#pragma mark - 无界面直发
+
+- (void)sendArmedTo:(NSString*)talker
+           duration:(double)seconds
+         completion:(void(^)(BOOL ok, NSString *reason))completion {
+
+    void (^fin)(BOOL, NSString*) = ^(BOOL ok, NSString *r){
+        if (completion) MVOnMain(^{ completion(ok, r); });
+    };
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self sendArmedTo:talker duration:seconds completion:completion];
+        });
+        return;
+    }
+
+    NSString *me = [MyVoiceResolver selfWxid] ?: @"";
+    id rc = [MyVoiceDirectSend recordController];
+    id as = [MyVoiceDirectSend audioSender];
+
+    // ---- 选启动入口：优先 RecordController（这是"聊天页录音"的正规入口） ----
+    id target = nil; NSString *startSel = nil; id stopTarget = nil; BOOL stopIsSender = NO;
+
+    if (rc && [rc respondsToSelector:NSSelectorFromString(@"StartRecordingFromUsr:ToUsr:UserInfo:")]) {
+        target = rc; startSel = @"StartRecordingFromUsr:ToUsr:UserInfo:";
+    } else if (as && [as respondsToSelector:NSSelectorFromString(@"StartRecordFrom:ToUser:UserInfo:")]) {
+        target = as; startSel = @"StartRecordFrom:ToUser:UserInfo:";
+    } else {
+        MVLog(@"[direct] 无可用启动入口：\n%@", [MyVoiceDirectSend diag]);
+        fin(NO, @"未找到微信内部录音入口");
+        return;
+    }
+
+    // ---- 选停止入口：优先 AudioSender 的**无参** StopRecord（实测存在，零歧义） ----
+    if (as && [as respondsToSelector:NSSelectorFromString(@"StopRecord")]) {
+        stopTarget = as; stopIsSender = YES;
+    } else if (rc && [rc respondsToSelector:NSSelectorFromString(@"StopRecordingInternal:")]) {
+        stopTarget = rc;
+    } else if (rc && [rc respondsToSelector:NSSelectorFromString(@"StopRecordingAndSend")]) {
+        stopTarget = rc;
+    }
+
+    MVLog(@"[direct] 直发开始：%@ -%@  (talker=%@, me=%@)",
+          NSStringFromClass(object_getClass(target)), startSel, talker, me.length ? me : @"?");
+
+    MVInvoke(target, startSel, @[me, talker ?: @"", [NSNull null]]);
+
+    // ---- 轮询确认"录音真的起来了"（判定标准：注入真的被消费，即 fedBytes>0） ----
+    // 用重复 NSTimer 而非递归 block：block 里只引用参数 t，不引用外部 timer 变量，
+    // 因此不会形成 block↔timer 的保留环（递归 block 会被 clang 报 retain cycle）。
+    __block NSInteger tries = 0;
+    [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES block:^(NSTimer *t){
+        tries++;
+        if ([MyVoiceRecorder fedBytes] > 0) {
+            [t invalidate];
+            double hold = MAX(0.6, seconds + 0.45);      // TTS 时长 + 收尾
+            MVLog(@"[direct] ✅ 录音已接管，%.1fs 后自动停止并发送", hold);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(hold * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                NSString *used = [MyVoiceDirectSend stopWith:stopTarget sender:stopIsSender fallbackRC:rc];
+                MVLog(@"[direct] ✅ 已调用停止/发送：%@（微信自行完成 SILK 编码/入库/上传/气泡）", used);
+                fin(YES, nil);
+            });
+            return;
+        }
+        if (tries >= 12) {                               // ≈1.2s 还没接管 → 判定失败
+            [t invalidate];
+            MVLog(@"[direct] ❌ 1.2s 内录音未被接管，取消直发（不会残留录音）");
+            [MyVoiceRecorder cancelFeed];
+            [MyVoiceDirectSend cancelWith:stopTarget sender:stopIsSender fallbackRC:rc];
+            fin(NO, @"微信内部录音未按预期启动（版本接口可能不同）");
+            return;
+        }
+    }];
+}
+
+// 停止并发送：优先无参 StopRecord（AudioSender）；退化到 RecordController 的停止方法
++ (NSString*)stopWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc {
+    if (stopTarget) {
+        if (isSender) {
+            MVInvoke(stopTarget, @"StopRecord", nil);
+            return @"AudioSender -StopRecord";
+        }
+        if ([stopTarget respondsToSelector:NSSelectorFromString(@"StopRecordingInternal:")]) {
+            MVInvoke(stopTarget, @"StopRecordingInternal:", nil);
+            return @"RecordController -StopRecordingInternal:";
+        }
+        MVInvoke(stopTarget, @"StopRecordingAndSend", nil);
+        return @"RecordController -StopRecordingAndSend";
+    }
+    if (rc) {
+        MVInvoke(rc, @"StopRecordingInternal:", nil);
+        return @"RecordController -StopRecordingInternal:（兜底）";
+    }
+    MVLog(@"[direct] ⚠️ 没有任何可用的停止入口，可能需手动松手/等微信自动结束");
+    return @"(无)";
+}
+
+// 取消录音（直发未接管时收尾，避免麦克风一直开着）
++ (void)cancelWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc {
+    id t = stopTarget ?: rc;
+    if (!t) return;
+    for (NSString *sel in @[@"CancelRecording", @"CancelRecord", @"StopRecording", @"StopRecord"]) {
+        if ([t respondsToSelector:NSSelectorFromString(sel)]) {
+            MVInvoke(t, sel, nil);
+            MVLog(@"[direct] 已调用取消：-%@", sel);
+            return;
+        }
+    }
+}
+
+@end

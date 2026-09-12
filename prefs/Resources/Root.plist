@@ -31,6 +31,27 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
+			<string>发送方式</string>
+			<key>footerText</key>
+			<string>自动＝点「发送」后直接调微信内部录音接口把语音发出去，全程不弹「按住说话」界面、不用你按住（推荐）。关掉＝回到老方式：先合成，再由你自己在聊天页按住「按住 说话」、松开才发送。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>自动发送（无需按住说话）</string>
+			<key>key</key>
+			<string>autoSend</string>
+			<key>default</key>
+			<true/>
+			<key>PostNotification</key>
+			<string>com.yzdmm2024.myvoice/settings</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
 			<string>合成引擎</string>
 			<key>footerText</key>
 			<string>离线＝系统中文语音（机器人音，免费、不联网）；云端＝联网合成。选「云端」后请在下面「云端服务」里二选一。</string>

@@ -50,7 +50,7 @@
 
 %ctor {
     @autoreleasepool {
-        MVLog(@"载入 我的语音 v2.2.0（云端：CosyVoice / 千问 Qwen-TTS 可选；录音队列按队列精确绑定）");
+        MVLog(@"载入 我的语音 v2.2.4（自动发送＝无界面直发：不再模拟按住说话；修复多队列抢食导致的叠音/回音）");
         MVLog(@"日志文件：%@", MVLogFilePath() ?: @"(不可写，只能用 syslog)");
         [[MyVoiceManager shared] setup];
 
