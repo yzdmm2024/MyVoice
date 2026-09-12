@@ -48,9 +48,32 @@
 
 #pragma mark - 初始化/显示
 
+// ★ 2.4.1：两个服务商的音色合并成一张列表 —— 千问预置在前、自己克隆的在后。
+//   每条带 provider 标记，点选时自动把 ttsProvider 切到对应服务商。
+//   旧版按服务商分开展示：切到 CosyVoice 后千问 48 音色「消失」、列表还是空的，
+//   发送必然失败（用户实测撞上了），统一列表从根上解决。
 - (NSArray<NSDictionary*>*)voiceList {
-    if (MVTTSProvider() == 1) return MVQwenVoiceList();
-    return MVVoices();
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSDictionary *d in MVQwenVoiceList()) {
+        NSMutableDictionary *m = [d mutableCopy];
+        m[@"provider"] = @1;
+        [out addObject:m];
+    }
+    for (NSDictionary *d in MVVoices()) {
+        NSMutableDictionary *m = [d mutableCopy];
+        m[@"provider"] = @0;
+        [out addObject:m];
+    }
+    return out;
+}
+
+// 当前选中音色对应的条目（用于知道它是千问还是克隆音色）
+- (NSDictionary*)selectedEntry {
+    NSString *vid = [self resolvedVoiceID];
+    if (!vid.length) return nil;
+    for (NSDictionary *d in self.allVoices)
+        if ([d[@"voiceID"] isEqualToString:vid]) return d;
+    return nil;
 }
 
 - (void)show {
@@ -326,7 +349,12 @@
 
     // 分组标题
     self.sectionLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, y, MV_PANEL_W - 28, 22)];
-    self.sectionLabel.text = @"千问（48音色·支持语气/语速）";
+    NSUInteger nQwen = 0, nMine = 0;
+    for (NSDictionary *d in self.allVoices)
+        ([d[@"provider"] integerValue] == 1) ? nQwen++ : nMine++;
+    self.sectionLabel.text = [NSString stringWithFormat:
+        @"千问预置 %lu 个（支持语气/语速） · 我的克隆 %lu 个",
+        (unsigned long)nQwen, (unsigned long)nMine];
     self.sectionLabel.font = [UIFont boldSystemFontOfSize:14];
     self.sectionLabel.textColor = [UIColor labelColor];
     [self.pickerView addSubview:self.sectionLabel];
@@ -423,7 +451,9 @@
     }
     NSDictionary *d = self.filteredVoices[(NSUInteger)indexPath.row];
     cell.textLabel.text = d[@"name"] ?: d[@"voiceID"];
-    cell.detailTextLabel.text = [NSString stringWithFormat:@"ID: %@ · model: %@", d[@"voiceID"] ?: @"", d[@"model"] ?: @""];
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ · %@",
+        ([d[@"provider"] integerValue] == 1) ? @"千问预置" : @"我的克隆",
+        d[@"model"] ?: @""];
     cell.accessoryType = [d[@"voiceID"] isEqualToString:self.selectedVoiceID] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
     return cell;
 }
@@ -432,12 +462,16 @@
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     NSDictionary *d = self.filteredVoices[(NSUInteger)indexPath.row];
     self.selectedVoiceID = d[@"voiceID"];
-    if (MVTTSProvider() == 1) {
+    // ★ 2.4.1：选谁就自动切到谁的服务商，两个列表从此不再互相"挤掉"
+    if ([d[@"provider"] integerValue] == 1) {
+        MVSetShared(@"ttsProvider", @1);
         MVSetShared(@"qwenVoice", self.selectedVoiceID);
         MVSetShared(@"qwenModel", d[@"model"] ?: @"qwen3-tts-flash");
     } else {
+        MVSetShared(@"ttsProvider", @0);
         MVSetShared(@"currentVoiceID", self.selectedVoiceID);
     }
+    MVLog(@"[panel] 选择音色 %@ → 服务商 %ld", self.selectedVoiceID, (long)[d[@"provider"] integerValue]);
     [self.voiceTable reloadData];
     [self hidePicker];
 }
@@ -518,8 +552,12 @@
     NSString *text = [self.textView.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (!text.length) { [[MyVoiceManager shared] toast:@"请先输入文字"]; return; }
     NSString *vid = [self resolvedVoiceID];
-    if (MVEngineMode()==1 && MVTTSProvider()==0 && !vid.length) { [[MyVoiceManager shared] toast:@"请先创建一个音色"]; return; }
-    if (MVTTSProvider()==0) {
+    NSDictionary *sel = [self selectedEntry];
+    if (MVEngineMode()==1 && !vid.length) {
+        [[MyVoiceManager shared] toast:@"请先在音色列表选择音色\n（或到「音色管理」添加克隆音色）"];
+        return;
+    }
+    if (MVEngineMode()==1 && sel && [sel[@"provider"] integerValue]==0 && MVTTSProvider()==0) {
         MVSetShared(@"currentVoiceID", vid);
     }
     [[MyVoiceManager shared] handleSendText:text];

@@ -70,7 +70,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.4.0（录音复刻免 OSS：DashScope 临时托管；面板 UI 优化）");
+        MVLog(@"载入 我的语音 v2.4.2（上传音频克隆；预览改用当前所选音色真合成试听）");
         MVLog(@"日志文件：%@", MVLogFilePath() ?: @"(不可写，只能用 syslog)");
     }
 

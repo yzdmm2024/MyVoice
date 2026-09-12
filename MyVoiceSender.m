@@ -84,6 +84,13 @@
     // 上一次还没被消费的装填先清掉，避免串台
     [MyVoiceRecorder cancelFeed];
 
+    // ★ 2.4.1：云端模式但没有可用音色 → 直接明确报错，别让 DashScope 返回怪错
+    if (MVEngineMode() == 1 && MVTTSProvider() == 0 && MVCurrentVoiceID().length == 0) {
+        MVLog(@"send 取消：CosyVoice 模式但没有任何克隆音色");
+        MVOnMain(^{ [[MyVoiceManager shared] toast:
+            @"还没有克隆音色：\n点「音色管理」录一段（免 OSS），\n或到音色列表选一个千问预置音色"]; });
+        return;
+    }
     // 云端模式但没填 API Key：直接明确报错，别回退到本地 AVS 报一段看不懂的错。
     // 千问虽免克隆，但仍需要一个阿里云百炼(DashScope)的 API Key。
     if (MVEngineMode() == 1 && MVAPIKey().length == 0) {

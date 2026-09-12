@@ -275,7 +275,7 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
             NSString *audioURL = audio[@"url"];
             if (!audioURL.length) {
                 MVLog(@"[qwen] TTS 未返回音频：%@", j);
-                completion(nil, MVErr(@"千问 TTS 未返回音频 URL"));
+                completion(nil, MVErr(@"千问 TTS 未返回音频 URL（多为音色/模型无效或账号未开通，请换一个音色试试）"));
                 return;
             }
             // 二次下载 wav
@@ -347,7 +347,7 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
         if (!audioURL.length) audioURL = j[@"audio_url"];
         if (!audioURL.length) {
             MVLog(@"[cloud] TTS 未返回 audio_url：%@", j);
-            completion(nil, MVErr(@"TTS 未返回音频 URL"));
+            completion(nil, MVErr(@"TTS 未返回音频 URL（多为音色无效或未开通对应模型，请换音色/检查服务商）"));
             return;
         }
         // 二次下载 wav
@@ -490,6 +490,7 @@ static inline uint32_t MVrd32(const uint8_t *p) {
 // PC 端真账号实测：上传 200，create_voice 返回 voice_id —— 录音复刻从此
 // 【只需 API Key，不需要用户配置任何 OSS】。凭证 5 分钟过期，量小够用。
 - (void)uploadToDashScopeInstant:(NSData*)data fileName:(NSString*)fname
+                     contentType:(NSString*)ct
                       completion:(void(^)(NSString *ossURL, NSError *err))completion {
     NSString *apiKey = MVAPIKey();
     if (!apiKey.length) { completion(nil, MVErr(@"未配置 API Key")); return; }
@@ -529,8 +530,8 @@ static inline uint32_t MVrd32(const uint8_t *p) {
         if ([pol[@"x_oss_server_side_encryption"] isKindOfClass:[NSString class]])
             field(@"x-oss-server-side-encryption", pol[@"x_oss_server_side_encryption"]);
         [body appendData:[[NSString stringWithFormat:
-            @"--%@\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%@\"\r\nContent-Type: audio/wav\r\n\r\n",
-            boundary, fname] dataUsingEncoding:NSUTF8StringEncoding]];
+            @"--%@\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%@\"\r\nContent-Type: %@\r\n\r\n",
+            boundary, fname, ct ?: @"audio/wav"] dataUsingEncoding:NSUTF8StringEncoding]];
         [body appendData:data];
         [body appendData:[[NSString stringWithFormat:@"\r\n--%@--\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
 
@@ -658,9 +659,12 @@ static inline uint32_t MVrd32(const uint8_t *p) {
     // ★ 2.4.0 三态：配了自有 OSS → 老路径（公网 URL）；没配 → DashScope 临时托管（免 OSS）
     BOOL hasOSS = (MVOSSBucket().length && MVOSSHost().length && MVOSSAk().length && MVOSSSk().length);
     if (hasOSS) {
-        NSString *key = [NSString stringWithFormat:@"myvoice/%@_%@.wav",
-                         name.length ? name : @"ref", [[NSUUID UUID] UUIDString]];
-        [self uploadToOSS:audio objectKey:key contentType:@"audio/wav" completion:^(NSString *url, NSError *e){
+        NSString *ext2 = path.pathExtension.length ? path.pathExtension.lowercaseString : @"wav";
+        NSString *key = [NSString stringWithFormat:@"myvoice/%@_%@.%@",
+                         name.length ? name : @"ref", [[NSUUID UUID] UUIDString], ext2];
+        NSDictionary *ctMap2 = @{@"wav": @"audio/wav", @"mp3": @"audio/mpeg", @"m4a": @"audio/mp4",
+                                 @"aac": @"audio/aac", @"flac": @"audio/flac", @"amr": @"audio/amr"};
+        [self uploadToOSS:audio objectKey:key contentType:(ctMap2[ext2] ?: @"audio/wav") completion:^(NSString *url, NSError *e){
             if (!url) { completion(nil, e ?: MVErr(@"OSS 上传失败")); return; }
             [self enrollCreateVoiceWithURL:url resolve:NO completion:completion];
         }];
@@ -668,8 +672,13 @@ static inline uint32_t MVrd32(const uint8_t *p) {
     }
 
     MVLog(@"[clone] 未配置 OSS，改走 DashScope 临时托管（免 OSS 复刻）");
-    NSString *fname = [NSString stringWithFormat:@"mv_%@.wav", [[NSUUID UUID] UUIDString]];
-    [self uploadToDashScopeInstant:audio fileName:fname completion:^(NSString *ossURL, NSError *e){
+    // ★ 2.4.2：上传音频复刻支持 wav/mp3/m4a/aac 等，按扩展名给文件名与 Content-Type
+    NSString *ext = path.pathExtension.length ? path.pathExtension.lowercaseString : @"wav";
+    NSDictionary *ctMap = @{@"wav": @"audio/wav", @"mp3": @"audio/mpeg", @"m4a": @"audio/mp4",
+                            @"aac": @"audio/aac", @"flac": @"audio/flac", @"amr": @"audio/amr"};
+    NSString *ct = ctMap[ext] ?: @"audio/wav";
+    NSString *fname = [NSString stringWithFormat:@"mv_%@.%@", [[NSUUID UUID] UUIDString], ext];
+    [self uploadToDashScopeInstant:audio fileName:fname contentType:ct completion:^(NSString *ossURL, NSError *e){
         if (!ossURL) { completion(nil, e ?: MVErr(@"音频托管失败")); return; }
         [self enrollCreateVoiceWithURL:ossURL resolve:YES completion:completion];
     }];
