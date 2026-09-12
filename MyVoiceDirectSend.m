@@ -269,6 +269,16 @@ static id gAS = nil;      // AudioSender
         return;
     }
 
+    // ★ 2.3.0：上游 wxid 缺失时最后再解析一次（用户此刻多半就在聊天页里，能拿到）。
+    //   仍失败就干净退出 —— 此时录音还没启动，不会残留半开的录音会话，更不会往
+    //   空会话里录（StartRecordingFromUsr: 传空 ToUsr 行为不可知，必须避免）。
+    if (!talker.length) talker = [MyVoiceResolver currentTalker];
+    if (!talker.length) {
+        MVLog(@"[direct] ❌ 无法确定会话 ID（wxid），放弃直发");
+        fin(NO, @"未识别到会话 ID（请停留在聊天页里再试）");
+        return;
+    }
+
     NSString *me = [MyVoiceResolver selfWxid] ?: @"";
     id rc = [MyVoiceDirectSend recordController];
     id as = [MyVoiceDirectSend audioSender];

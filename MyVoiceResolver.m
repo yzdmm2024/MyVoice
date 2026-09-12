@@ -142,6 +142,22 @@
 static NSString *_mvCaptured = nil;      // 进程内缓存
 static NSTimeInterval _mvCapturedAt = 0; // 捕获时间（30 分钟内有效）
 
+// ★ 2.3.0：放松校验。getChatUserName 返回的是**会话对方的真实微信号**，而很多用户的
+//   微信号是自定义 ID（如 zhang3abc、mr_li-01），并不以 wxid_ 开头 —— sanitize 一律拒掉，
+//   导致「明明就在聊天页里也提示未识别到聊天对象」。这里按微信 ID 本身的字符规则
+//   （字母开头，6~32 位字母/数字/_/-，不含空格和 CJK）放行这种自定义 ID。
+//   只用于 getChatUserName 的返回值（VC 自己的 getter，不会返回昵称），其他路径仍走严格 sanitize。
++ (NSString*)sanitizeName:(NSString*)s {
+    if (![s isKindOfClass:[NSString class]]) return nil;
+    NSString *t = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (t.length < 6 || t.length > 32) return nil;
+    static NSPredicate *pred = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ pred = [NSPredicate predicateWithFormat:
+                             @"SELF MATCHES '^[A-Za-z][A-Za-z0-9_-]{5,31}$'"]; });
+    return [pred evaluateWithObject:t] ? t : nil;
+}
+
 // 只认微信内部标识。放宽会把「昵称」当会话 id 发出去 → 发错人，宁可识别不出来。
 + (NSString*)sanitize:(NSString*)s {
     if (![s isKindOfClass:[NSString class]]) return nil;
@@ -232,8 +248,10 @@ static BOOL MVLooksLikeObject(id o) {
 + (NSString*)talkerFromChatVC:(id)vc {
     if (![self isChatVC:vc]) return nil;
 
-    // ① 直接问它（8.0.75 上 BaseMsgContentViewController / LogicController 都有）
-    NSString *t = [self sanitize:[self call:vc name:@"getChatUserName"]];
+    // ① 直接问它（8.0.75 上 BaseMsgContentViewController / LogicController 都有）。
+    //    ★ 2.3.0：自定义微信号（不带 wxid_ 前缀）也算数，否则这种聊天页永远「未识别」。
+    NSString *raw = [self call:vc name:@"getChatUserName"];
+    NSString *t = [self sanitize:raw] ?: [self sanitizeName:raw];
     if (t) return t;
 
     // ② GetContact / GetCContact → m_nsUsrName
@@ -251,7 +269,10 @@ static BOOL MVLooksLikeObject(id o) {
     if (dg) {
         t = [self talkerFromContact:[self valueForIvars:dg names:@[@"m_contact"]]];
         if (!t) t = [self talkerFromContact:[self call:dg name:@"getCurrentContact"]];
-        if (!t) t = [self sanitize:[self call:dg name:@"getChatUserName"]];
+        if (!t) {
+            NSString *raw2 = [self call:dg name:@"getChatUserName"];
+            t = [self sanitize:raw2] ?: [self sanitizeName:raw2];
+        }
         if (t) return t;
     }
 
@@ -307,6 +328,15 @@ static BOOL MVLooksLikeObject(id o) {
     return [self capturedTalker];
 }
 
+// ★ 2.3.0：当前打开的聊天页 VC 实例。自动发送链路在 wxid 解析失败时用它判断
+//   「用户是否就在聊天页里」，从而决定继续尝试而不是直接报错。⚠️ 主线程调用。
++ (UIViewController*)currentChatVC {
+    for (UIViewController *vc in [self allViewControllers]) {
+        if ([self isChatVC:vc]) return vc;
+    }
+    return nil;
+}
+
 + (NSString*)talkerDiag {
     NSMutableString *s = [NSMutableString string];
     NSUInteger nChat = 0;
@@ -315,7 +345,7 @@ static BOOL MVLooksLikeObject(id o) {
         nChat++;
         NSString *cn = NSStringFromClass(object_getClass(vc));
         [s appendFormat:@"聊天页 %@\n", cn];
-        [s appendFormat:@"  -getChatUserName = %@\n", [self sanitize:[self call:vc name:@"getChatUserName"]] ?: @"(无/空)"];
+        [s appendFormat:@"  -getChatUserName = %@\n", ([self sanitize:[self call:vc name:@"getChatUserName"]] ?: [self sanitizeName:[self call:vc name:@"getChatUserName"]]) ?: @"(无/空)"];
         id ct = [self call:vc name:@"GetContact"];
         [s appendFormat:@"  -GetContact = %@\n", ct ? NSStringFromClass(object_getClass(ct)) : @"(无)"];
         [s appendFormat:@"  .m_contact = %@\n", [self valueForIvars:vc names:@[@"m_contact"]] ? NSStringFromClass(object_getClass([self valueForIvars:vc names:@[@"m_contact"]])) : @"(无)"];

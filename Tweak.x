@@ -70,7 +70,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.2.9（修复运行期闪退：VC hook 改为不持有对象＋指针闸门）");
+        MVLog(@"载入 我的语音 v2.3.0（修复未识别到聊天对象：自定义微信号放行 + 在聊天页内即允许发送）");
         MVLog(@"日志文件：%@", MVLogFilePath() ?: @"(不可写，只能用 syslog)");
     }
 

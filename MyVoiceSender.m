@@ -63,10 +63,20 @@
 
     NSString *peer = (talker.length ? talker : [MyVoiceResolver currentTalker]);
     if (!peer.length) {
-        MVLog(@"send 取消：未识别聊天对象（请先打开该聊天页）");
-        [[MyVoiceManager shared] toast:@"未识别到聊天对象：请先打开微信聊天页"];
-        return;
+        // ★ 2.3.0：wxid 识别失败不再一票否决 —— 只要用户当前就在聊天页里就继续尝试
+        //   （发给谁由「当前聊天页」的录音上下文决定，DirectSend 启动录音前还会再解析一次）。
+        //   但连一个活着的聊天页都没有 → 真的没有发送目标，此时才拦。
+        __block BOOL hasChatVC = NO;
+        if ([NSThread isMainThread]) hasChatVC = ([MyVoiceResolver currentChatVC] != nil);
+        else dispatch_sync(dispatch_get_main_queue(), ^{ hasChatVC = ([MyVoiceResolver currentChatVC] != nil); });
+        if (!hasChatVC) {
+            MVLog(@"send 取消：未识别聊天对象且当前不在任何聊天页");
+            [[MyVoiceManager shared] toast:@"未识别到聊天对象：请先进入聊天页再发送"];
+            return;
+        }
+        MVLog(@"[send] wxid 未识别，但当前在聊天页里 —— 继续尝试自动发送");
     }
+    NSString *peerDesc = peer.length ? peer : @"当前聊天";
 
     // 上一次还没被消费的装填先清掉，避免串台
     [MyVoiceRecorder cancelFeed];
@@ -86,9 +96,9 @@
         vid = (MVTTSProvider() == 1) ? MVQwenVoice() : MVCurrentVoiceID();
     }
 
-    MVLog(@"合成中 talker=%@ mode=%ld len=%lu", peer, (long)MVEngineMode(), (unsigned long)text.length);
+    MVLog(@"合成中 talker=%@ mode=%ld len=%lu", peerDesc, (long)MVEngineMode(), (unsigned long)text.length);
     NSTimeInterval tSynth = [[NSDate date] timeIntervalSince1970];   // ★ 2.2.7 发送延迟打点
-    [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"正在合成（发给 %@）…", peer]];
+    [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"正在合成（发给 %@）…", peerDesc]];
 
     [engine synthesizeText:text voiceID:vid completion:^(NSData *pcm, NSError *err){
         // ⚠️ 这个 block 在后台线程（离线=全局队列，云端=NSURLSession 回调）。

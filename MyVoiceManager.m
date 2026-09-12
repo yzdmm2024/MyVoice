@@ -70,14 +70,14 @@ static void MVSettingsChanged(CFNotificationCenterRef center, void *observer,
 
 - (void)handleSendText:(NSString*)text {
     if (!MVEnabled()) { MVLog(@"未启用"); return; }
-    // 聊天对象：currentTalker 内部已经把「聊天页实时解析 → hook 捕获 → 落盘」串起来了
+    // 聊天对象：currentTalker 内部已经把「聊天页实时解析 → hook 捕获 → 落盘」串起来了。
+    // ★ 2.3.0：识别不到 wxid 不再一票否决 —— 用户就在聊天页里时照样继续（发给谁由
+    //   当前聊天页的录音上下文决定，Sender/DirectSend 会在启动录音前再解析一次）。
     NSString *talker = [MyVoiceResolver currentTalker];
     if (!talker.length) {
-        MVLog(@"未识别到聊天对象\n%@", [MyVoiceResolver talkerDiag]);
-        [self toast:@"未识别到聊天对象。\n请打开目标聊天窗口（或在该窗口按住说话一次），\n再返回本面板发送。"];
-        return;
+        MVLog(@"未识别到聊天对象（wxid）—— 若当前在聊天页则继续尝试\n%@", [MyVoiceResolver talkerDiag]);
     }
-    MVLog(@"发送请求：talker=%@ text=%@", talker, text);
+    MVLog(@"发送请求：talker=%@ text=%@", talker ?: @"(未识别)", text);
     // 2.1.0：不再直接发 —— 先把合成好的音频装填进录音管线，
     // 用户回到聊天页按住说话时才会真正发出去（见 MyVoiceSender 的说明）。
     // 音色按服务商取：千问用预置音色（qwenVoice），CosyVoice 用克隆音色（currentVoiceID）。
@@ -92,7 +92,7 @@ static void MVSettingsChanged(CFNotificationCenterRef center, void *observer,
         NSString *short_ = t.length > 18 ? [NSString stringWithFormat:@"…%@", [t substringFromIndex:t.length - 16]] : t;
         return [NSString stringWithFormat:@"会话: %@", short_];
     }
-    return @"会话: 未识别（打开聊天窗口）";
+    return @"会话: 未识别（在聊天页里也可发送）";
 }
 
 - (void)toast:(NSString*)msg {

@@ -20,6 +20,8 @@
 // 当前聊天对象 wxid（多路径解析，见 .m 里的优先级注释）
 + (NSString*)currentTalker;
 + (UIViewController*)topViewController;
+// ★ 2.3.0：当前打开的聊天页 VC（自动发送在 wxid 解析失败时的兜底判断）。⚠️ 主线程调用。
++ (UIViewController*)currentChatVC;
 // 遍历当前所有可见 VC（含子/模态），用于定位聊天页与「按住说话」按钮
 + (NSArray<UIViewController*>*)allViewControllers;
 // 判定某个 VC 是不是聊天页（类名含 MsgContent）
