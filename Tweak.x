@@ -70,7 +70,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.4.3（修复克隆音色合成的响应解析 + 音色选择读序）");
+        MVLog(@"载入 我的语音 v2.4.4（会话多队列喂入——修发原声；长按删除克隆音色）");
         MVLog(@"日志文件：%@", MVLogFilePath() ?: @"(不可写，只能用 syslog)");
     }
 

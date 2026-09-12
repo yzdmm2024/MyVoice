@@ -368,6 +368,12 @@
     self.voiceTable.layer.cornerRadius = 10;
     self.voiceTable.separatorInset = UIEdgeInsetsMake(0, 12, 0, 12);
     [self.pickerView addSubview:self.voiceTable];
+
+    // ★ 2.4.4：长按删除「我的克隆」音色（千问预置不可删）
+    UILongPressGestureRecognizer *lpDel = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onVoiceLongPress:)];
+    lpDel.minimumPressDuration = 0.6;
+    [self.voiceTable addGestureRecognizer:lpDel];
 }
 
 - (NSInteger)emotionIndex:(NSString*)emotion {
@@ -474,6 +480,44 @@
     MVLog(@"[panel] 选择音色 %@ → 服务商 %ld", self.selectedVoiceID, (long)[d[@"provider"] integerValue]);
     [self.voiceTable reloadData];
     [self hidePicker];
+}
+
+// ★ 2.4.4：长按删除克隆/设计音色 —— 只从本地列表移除，
+//   云端账号上的音色不受影响（想彻底删可去阿里云百炼控制台）。
+- (void)onVoiceLongPress:(UILongPressGestureRecognizer*)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    CGPoint p = [g locationInView:self.voiceTable];
+    NSIndexPath *ip = [self.voiceTable indexPathForRowAtPoint:p];
+    if (!ip || ip.row >= (NSInteger)self.filteredVoices.count) return;
+    NSDictionary *d = self.filteredVoices[(NSUInteger)ip.row];
+    if ([d[@"provider"] integerValue] == 1) {
+        [[MyVoiceManager shared] toast:@"千问预置音色不可删除"];
+        return;
+    }
+    NSString *vid = d[@"voiceID"] ?: @"";
+    NSString *name = d[@"name"] ?: vid;
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"删除音色"
+        message:[NSString stringWithFormat:@"确定从列表删除「%@」吗？\n（云端账号上的音色不受影响）", name]
+        preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"删除" style:UIAlertActionStyleDestructive
+        handler:^(UIAlertAction *a){
+            NSMutableArray *keep = [NSMutableArray array];
+            for (NSDictionary *x in MVVoices())
+                if (![x[@"voiceID"] isEqualToString:vid]) [keep addObject:x];
+            MVSetShared(@"voices", keep);
+            if ([MVCurrentVoiceID() isEqualToString:vid]) {
+                NSString *next = ((NSDictionary*)keep.firstObject)[@"voiceID"] ?: @"";
+                MVSetShared(@"currentVoiceID", next);
+            }
+            [self refreshVoiceState];
+            [self.voiceTable reloadData];
+            MVLog(@"[panel] 已删除音色 %@ (%@)，剩余 %lu 个", name, vid, (unsigned long)keep.count);
+            [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"已删除「%@」", name]];
+        }]];
+    UIViewController *top = [MyVoiceResolver anyWindow].rootViewController;
+    while (top.presentedViewController) top = top.presentedViewController;
+    [top presentViewController:ac animated:YES completion:nil];
 }
 
 #pragma mark - 会话/拖动
