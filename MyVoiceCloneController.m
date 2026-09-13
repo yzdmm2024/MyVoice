@@ -1,7 +1,9 @@
 #import "MyVoiceCloneController.h"
 #import "MyVoiceCommon.h"
 #import "MyVoiceCloud.h"
+#import "MyVoiceSilk.h"
 #import <AVFoundation/AVFoundation.h>
+#include <string.h>
 
 // 音色创建：三种模式（★ 2.4.2 新增「上传音频」）
 //   0 录音复刻 —— 现场录一段参考音频 → DashScope 临时托管（免 OSS）→ CosyVoice 复刻
@@ -232,24 +234,21 @@
     NSString *ext = src.pathExtension.length ? src.pathExtension.lowercaseString : @"wav";
     // ★ 2.8.9：.aud 支持。微信/QQ 导出的 .aud 通常是 AMR（#!AMR 头）或 SILK（#!SILK 头）封装，
     //   直接拿去上传服务端不认、AVFoundation 也嗅探不出容器 —— 先看魔数再决定走哪条路。
-    if ([ext isEqualToString:@"aud"] || [ext isEqualToString:@"amr"]) {
-        NSData *head = [NSData dataWithContentsOfFile:src.path options:NSDataReadingMappedIfSafe error:nil];
-        NSString *magic = head ? [[NSString alloc] initWithData:
-                                [head subdataWithRange:NSMakeRange(0, MIN(16, head.length))]
-                                              encoding:NSUTF8StringEncoding] : nil;
-        if ([magic hasPrefix:@"#!SILK"]) {
-            // SILK 是腾讯私有语音流，iOS 无系统解码器，本地转不了，明确告知怎么办
-            [src stopAccessingSecurityScopedResource];
-            self.uploadPath = nil;
-            self.uploadName = src.lastPathComponent;
-            self.pickedLabel.text = [NSString stringWithFormat:@"已选择：%@", self.uploadName];
-            self.statusLabel.text = @"❌ 这是 SILK 封装的 .aud（微信/QQ 原始语音流），iOS 没有系统解码器，本机转不了。\n"
-                                     @"请先用电脑转成 mp3/wav 再选：\n"
-                                     @"ffmpeg -i 文件.aud 文件.mp3  （或用格式工厂）";
-            return;
-        }
-        if ([magic hasPrefix:@"#!AMR"]) ext = @"amr";   // 强制按 amr 落盘，帮 AVFoundation 认容器
+    // ★ 2.8.10：检测改为「前 24 字节内查找」——微信 .aud 在 #!SILK_V3 前还有
+    //   1 字节版本前缀（0x02），旧的 hasPrefix 会被它绕过（2.8.9 实机踩坑：克隆失败）。
+    NSData *head = [NSData dataWithContentsOfFile:src.path options:NSDataReadingMappedIfSafe error:nil];
+    const uint8_t *hb = head.bytes;
+    NSUInteger hl = head.length;
+    NSUInteger scan = MIN(hl, (NSUInteger)24);
+    BOOL isSilk = (hb && scan >= 6 && memmem(hb, scan, "#!SILK", 6) != NULL);
+    BOOL isAMR  = (hb && scan >= 5 && memmem(hb, scan, "#!AMR", 5) != NULL);
+    if (isSilk) {
+        // 微信/QQ 语音：内嵌 SILK 解码器本地解成 wav（不再需要电脑转码）
+        [src stopAccessingSecurityScopedResource];
+        [self decodeSilkFromURL:src];
+        return;
     }
+    if (isAMR) ext = @"amr";   // 强制按 amr 落盘，帮 AVFoundation 认容器
     NSString *dst = [NSTemporaryDirectory() stringByAppendingPathComponent:
                      [NSString stringWithFormat:@"mv_upload_%@.%@", [[NSUUID UUID] UUIDString], ext]];
     NSError *e = nil;
@@ -263,6 +262,33 @@
         return;
     }
     [self finalizePickedPath:dst name:src.lastPathComponent];
+}
+
+// ★ 2.8.10：SILK（微信 .aud）本地解码 → wav → 时长校验，全程在手机上完成
+- (void)decodeSilkFromURL:(NSURL*)src {
+    self.uploadPath = nil;
+    self.uploadName = src.lastPathComponent;
+    self.pickedLabel.text = [NSString stringWithFormat:@"已选择：%@", self.uploadName];
+    self.statusLabel.text = @"正在解码 .aud（微信语音）…";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSString *inPath  = src.path ?: @"";
+        NSString *wavPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                             [NSString stringWithFormat:@"mv_silk_%@.wav", [[NSUUID UUID] UUIDString]]];
+        double secs = 0;
+        int rc = mv_silk_decode_file(inPath.UTF8String, wavPath.UTF8String, &secs);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (rc != 0) {
+                self.statusLabel.text = [NSString stringWithFormat:
+                    @"❌ .aud（微信语音）解码失败（错误码 %d）。\n"
+                    @"文件可能不完整或不是标准微信语音，可换一段再试。", rc];
+                return;
+            }
+            NSString *shown = self.uploadName.pathExtension.length
+                ? [[self.uploadName stringByDeletingPathExtension] stringByAppendingPathExtension:@"wav"]
+                : [self.uploadName stringByAppendingPathExtension:@"wav"];
+            [self finalizePickedPath:wavPath name:shown];
+        });
+    });
 }
 
 // ★ 2.8.9：AMR/.aud → m4a。AVAssetExportSession 转码完成后接原有的时长校验逻辑。

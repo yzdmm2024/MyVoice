@@ -1,8 +1,8 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 2.8.9
+Version: 2.8.10
 Architecture: iphoneos-arm64
-Description: 节约时间，打字即可。★ 2.8.9 「从文件选取音频」新增 .aud 格式支持：自动识别微信/QQ 语音的 AMR 封装（#!AMR 头）并就地转成 m4a 后再克隆；SILK 封装（#!SILK 头）iOS 无解码器，给出 ffmpeg/格式工厂转码提示，不再无声失败。
+Description: 节约时间，打字即可。★ 2.8.10 微信语音 .aud 直选支持：内嵌腾讯 SILK 解码器，选 .aud 后手机本地解码成 wav 再克隆，无需电脑转码；修复 2.8.9 的魔数检测被微信 1 字节版本前缀绕过的 bug。另优化主界面排版：输入框加高 84→124、各行间距均匀化、状态行上移，消除「音色管理」与「已连接」之间的大片空白。
 Maintainer: yzdmm2024
 Author: yzdmm2024
 Section: Tweaks

@@ -9,8 +9,11 @@ TWEAK_NAME := MyVoice
 MyVoice_FILES := Tweak.x MyVoiceManager.m MyVoiceResolver.m MyVoiceEngine.m \
                  MyVoiceAVSEngine.m MyVoicePanel.m MyVoiceSender.m \
                  MyVoiceRecorder.m MyVoiceDirectSend.m MyVoiceCloud.m MyVoiceCloneController.m MyVoiceLicense.m
+# ★ 2.8.10：内嵌腾讯 SILK 解码器（kn007/silk-v3-decoder，BSD），支持微信 .aud 本地解码
+MyVoice_FILES += MyVoiceSilk.c $(wildcard silk/src/*.c)
 MyVoice_FRAMEWORKS := Foundation UIKit AVFoundation Security AudioToolbox
 MyVoice_CFLAGS := -fobjc-arc -Wno-error -Wno-deprecated-declarations
+MyVoice_CFLAGS += -Isilk/interface -Isilk/src
 
 # 离线 TTS 引擎：本地 Flite（由 flite/vendor.sh 交叉编译，CI 中拉取并构建）。
 # 若 flite/build/libflite.a 存在则启用真实离线合成；否则回退为内置 Sine 占位，保证必定可编译。

@@ -325,8 +325,8 @@
     title.textColor = [UIColor colorWithWhite:0 alpha:0.9];
     [self.homeView addSubview:title];
 
-    // 文字输入
-    self.textView = [[UITextView alloc] initWithFrame:CGRectMake(14, 36, W - 28, 84)];
+    // 文字输入（★ 2.8.10：84 → 124，吸收主界面底部富余空间，长文本更少滚动）
+    self.textView = [[UITextView alloc] initWithFrame:CGRectMake(14, 36, W - 28, 124)];
     self.textView.layer.cornerRadius = 14;
     self.textView.font = [UIFont systemFontOfSize:15];
     self.textView.textColor = [UIColor colorWithWhite:0 alpha:0.85];
@@ -344,7 +344,7 @@
     // ★ 2.8.5：文本一键纠偏（数字读法 / 标点 / 断句 / 符号），点一下改"该怎么念"
     self.polishBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     // ★ 2.8.7：纠偏 + 模板 并排（原来纠偏独占一行）
-    self.polishBtn.frame = CGRectMake(14, 126, (W - 38) * 0.60, 30);
+    self.polishBtn.frame = CGRectMake(14, 168, (W - 38) * 0.60, 30);
     [self.polishBtn setTitle:@"✨ 一键纠偏" forState:UIControlStateNormal];
     self.polishBtn.titleLabel.font = [UIFont systemFontOfSize:12.5 weight:UIFontWeightMedium];
     [self.polishBtn setTitleColor:[UIColor colorWithRed:0 green:0.42 blue:0.95 alpha:1]
@@ -358,7 +358,7 @@
 
     // ★ 2.8.7：常用文本模板（一键把整段文字换成模板内容）
     self.templateBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.templateBtn.frame = CGRectMake(14 + (W - 38) * 0.60 + 10, 126, (W - 38) * 0.40 - 10, 30);
+    self.templateBtn.frame = CGRectMake(14 + (W - 38) * 0.60 + 10, 168, (W - 38) * 0.40 - 10, 30);
     [self.templateBtn setTitle:@"模板" forState:UIControlStateNormal];
     self.templateBtn.titleLabel.font = [UIFont systemFontOfSize:12.5 weight:UIFontWeightMedium];
     [self.templateBtn setTitleColor:[UIColor colorWithWhite:0 alpha:0.75] forState:UIControlStateNormal];
@@ -371,7 +371,7 @@
 
     // 音色选择（一行）
     self.voiceSelectBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.voiceSelectBtn.frame = CGRectMake(14, 164, W - 28, 40);
+    self.voiceSelectBtn.frame = CGRectMake(14, 206, W - 28, 40);
     self.voiceSelectBtn.titleLabel.adjustsFontSizeToFitWidth = YES;
     self.voiceSelectBtn.titleLabel.minimumScaleFactor = 0.72;
     self.voiceSelectBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.04];
@@ -385,7 +385,7 @@
 
     // 合成 + 预览并排
     self.sendBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.sendBtn.frame = CGRectMake(14, 212, (W - 38) * 0.58, 42);
+    self.sendBtn.frame = CGRectMake(14, 254, (W - 38) * 0.58, 42);
     [self.sendBtn setTitle:@"合成语音" forState:UIControlStateNormal];
     self.sendBtn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
     [self.sendBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
@@ -410,7 +410,7 @@
     [self.homeView addSubview:self.sendBtn];
 
     self.previewBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.previewBtn.frame = CGRectMake(14 + (W - 38) * 0.58 + 10, 212, (W - 38) * 0.42 - 10, 42);
+    self.previewBtn.frame = CGRectMake(14 + (W - 38) * 0.58 + 10, 254, (W - 38) * 0.42 - 10, 42);
     // ★ 2.8.7：这个按钮走的是系统 AVSpeech【本机】朗读，不是云端音色 —— 名字说清楚
     [self.previewBtn setTitle:@"本机试听" forState:UIControlStateNormal];
     self.previewBtn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
@@ -428,7 +428,7 @@
 
     // 音色管理（独立一行短标题）
     self.cloneBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.cloneBtn.frame = CGRectMake(14, 262, W - 28, 40);
+    self.cloneBtn.frame = CGRectMake(14, 304, W - 28, 40);
     [self.cloneBtn setTitle:@"＋ 音色管理" forState:UIControlStateNormal];
     self.cloneBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
     [self.cloneBtn setTitleColor:[UIColor colorWithRed:0 green:0.42 blue:0.95 alpha:1] forState:UIControlStateNormal];
@@ -440,7 +440,7 @@
     [self.homeView addSubview:self.cloneBtn];
 
     // 会话状态（绿点 + 文字）
-    self.sessionLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, MV_PANEL_H - 28, W - 32, 18)];
+    self.sessionLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, MV_PANEL_H - 50, W - 32, 18)];   // ★ 2.8.10：382 → 360，贴住内容区不再悬空
     self.sessionLabel.font = [UIFont systemFontOfSize:11];
     self.sessionLabel.textColor = [UIColor colorWithWhite:0 alpha:0.3];
     self.sessionLabel.userInteractionEnabled = YES;
