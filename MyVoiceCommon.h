@@ -294,8 +294,28 @@ static inline NSArray* MVQwenVoiceList(void) {
         @{@"name": @"晓东(京腔男)",    @"voiceID": @"Dylan",    @"model": @"qwen3-tts-flash"},
         @{@"name": @"晴儿(川语女)",    @"voiceID": @"Sunny",    @"model": @"qwen3-tts-flash"},
         @{@"name": @"Jennifer(美语)",  @"voiceID": @"Jennifer", @"model": @"qwen3-tts-flash"},
-        @{@"name": @"Ryan(男声)",      @"voiceID": @"Ryan",     @"model": @"qwen3-tts-flash"},
-    ];
+        @{@"name": @"Ryan(男声)",      @"voiceID": @"Ryan",     @"model": @"qwen3-tts-flash"},;
+    
+        /* 方言音色 */
+        @{@"name": @"粤语-阿强(男)",   @"voiceID": @"Rocky",    @"model": @"qwen3-tts-flash"},
+        @{@"name": @"粤语-阿清(女)",   @"voiceID": @"Kiki",     @"model": @"qwen3-tts-flash"},
+        @{@"name": @"南京-老李(男)",   @"voiceID": @"Li",       @"model": @"qwen3-tts-flash"},
+        @{@"name": @"陕西-秦川(男)",   @"voiceID": @"Marcus",   @"model": @"qwen3-tts-flash"},
+        @{@"name": @"闽南-阿杰(男)",   @"voiceID": @"Roy",      @"model": @"qwen3-tts-flash"},
+        @{@"name": @"天津-李彼得",     @"voiceID": @"Peter",    @"model": @"qwen3-tts-flash"},
+        @{@"name": @"四川-程川(男)",   @"voiceID": @"Eric",     @"model": @"qwen3-tts-flash"},
+        /* 新增普通音色 */
+        @{@"name": @"茉兔(女·搞怪)",   @"voiceID": @"Momo",     @"model": @"qwen3-tts-flash"},
+        @{@"name": @"十三(女·自信)",   @"voiceID": @"Vivian",   @"model": @"qwen3-tts-flash"},
+        @{@"name": @"月白(女·清冷)",   @"voiceID": @"Moon",     @"model": @"qwen3-tts-flash"},
+        @{@"name": @"四月(女·温润)",   @"voiceID": @"Maia",     @"model": @"qwen3-tts-flash"},
+        @{@"name": @"萌宝(男·奶萌)",   @"voiceID": @"Bella",    @"model": @"qwen3-tts-flash"},
+        @{@"name": @"燕铮莺(男·洪亮)", @"voiceID": @"Bellona",  @"model": @"qwen3-tts-flash"},
+        @{@"name": @"田叔(男·沉稳)",   @"voiceID": @"Vincent",  @"model": @"qwen3-tts-flash"},
+        @{@"name": @"邻家妹妹(女)",    @"voiceID": @"Nini",     @"model": @"qwen3-tts-flash"},
+        @{@"name": @"小婉(女·柔和)",   @"voiceID": @"Seren",    @"model": @"qwen3-tts-flash"},
+        @{@"name": @"少女阿月(女)",    @"voiceID": @"Stella",   @"model": @"qwen3-tts-flash"},
+];
 }
 
 // DashScope（北京地域）凭证
