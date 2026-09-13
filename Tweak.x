@@ -70,7 +70,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.5.2（QQ 直发改用聊天页自己的 PttRecorderManager：按住一次激活）");
+        MVLog(@"载入 我的语音 v2.5.3（QQ 激活修复：hook -startRecord 扣留实例，绕开 Swift 分配路径）");
         MVLog(@"宿主 App：%@（版本 %@）",
               [NSBundle mainBundle].bundleIdentifier ?: @"?",
               [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");
