@@ -389,7 +389,7 @@
     pt.textColor = [UIColor colorWithWhite:1 alpha:0.9];
     [header addSubview:pt];
 
-    self.reloadBtn = [UIButton buttonWithType:System];
+    self.reloadBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     [self.reloadBtn setTitle:@"刷新" forState:UIControlStateNormal];
     self.reloadBtn.frame = CGRectMake(W - 68, 8, 54, 26);
     self.reloadBtn.titleLabel.font = [UIFont systemFontOfSize:12];
