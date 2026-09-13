@@ -70,7 +70,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.8.0（Liquid Glass UI）");
+        MVLog(@"载入 我的语音 v2.8.1（修复停止录音 + mp3 权限 + 界面可读性）");
         MVLog(@"宿主 App：%@（版本 %@）",
               [NSBundle mainBundle].bundleIdentifier ?: @"?",
               [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");

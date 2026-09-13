@@ -151,7 +151,7 @@
     fab.frame = CGRectMake(w.bounds.size.width - MV_FAB_SIZE - 6, w.bounds.size.height * 0.45, MV_FAB_SIZE, MV_FAB_SIZE);
     [fab setTitle:@"语" forState:UIControlStateNormal];
     fab.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBold];
-    [fab setTitleColor:[UIColor colorWithWhite:1 alpha:0.95] forState:UIControlStateNormal];
+    [fab setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     fab.layer.cornerRadius = MV_FAB_SIZE / 2;
     fab.clipsToBounds = YES;
     fab.backgroundColor = [UIColor clearColor];
@@ -159,7 +159,7 @@
     CAGradientLayer *fg = [CAGradientLayer layer];
     fg.frame = CGRectMake(0, 0, MV_FAB_SIZE, MV_FAB_SIZE);
     fg.colors = @[
-        (id)[UIColor colorWithWhite:1 alpha:0.2].CGColor,
+        (id)[UIColor colorWithWhite:0 alpha:0.2].CGColor,
         (id)[UIColor colorWithRed:0 green:0.4 blue:0.9 alpha:0.35].CGColor,
         (id)[UIColor colorWithRed:0 green:0.2 blue:0.6 alpha:0.4].CGColor];
     fg.locations = @[@0, @0.5, @1];
@@ -180,7 +180,7 @@
     CAGradientLayer *fhg = [CAGradientLayer layer];
     fhg.frame = fh.bounds;
     fhg.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.25].CGColor,
-                   (id)[UIColor colorWithWhite:1 alpha:0.0].CGColor];
+                   (id)[UIColor colorWithWhite:0 alpha:0.0].CGColor];
     [fh.layer addSublayer:fhg];
     [fab addSubview:fh];
     self.fab = fab;
@@ -257,7 +257,7 @@
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 10, 120, 20)];
     title.text = @"我的语音";
     title.font = [UIFont systemFontOfSize:15 weight:UIFontWeightBold];
-    title.textColor = [UIColor colorWithWhite:1 alpha:0.9];
+    title.textColor = [UIColor colorWithWhite:0 alpha:0.9];
     [self.homeView addSubview:title];
 
     // 文字输入
@@ -348,7 +348,7 @@
     // 会话状态（绿点 + 文字）
     self.sessionLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, 252, W - 32, 18)];
     self.sessionLabel.font = [UIFont systemFontOfSize:11];
-    self.sessionLabel.textColor = [UIColor colorWithWhite:1 alpha:0.3];
+    self.sessionLabel.textColor = [UIColor colorWithWhite:0 alpha:0.3];
     self.sessionLabel.userInteractionEnabled = YES;
     [self.sessionLabel addGestureRecognizer:[[UITapGestureRecognizer alloc]
         initWithTarget:self action:@selector(refreshSession)]];
@@ -367,9 +367,9 @@
     }
     NSString *provider = (MVTTSProvider() == 1) ? @"千问" : @"CV";
     NSMutableAttributedString *attr = [[NSMutableAttributedString alloc]
-        initWithString:[NSString stringWithFormat:@"音色  "] attributes:@{NSFontAttributeName:[UIFont systemFontOfSize:13], NSForegroundColorAttributeName:[UIColor colorWithWhite:1 alpha:0.35]}];
-    [attr appendAttributedString:[[NSAttributedString alloc] initWithString:name attributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:14], NSForegroundColorAttributeName:[UIColor colorWithWhite:1 alpha:0.85]}]];
-    [attr appendAttributedString:[[NSAttributedString alloc] initWithString:@"  ›" attributes:@{NSFontAttributeName:[UIFont systemFontOfSize:12], NSForegroundColorAttributeName:[UIColor colorWithWhite:1 alpha:0.2]}]];
+        initWithString:[NSString stringWithFormat:@"音色  "] attributes:@{NSFontAttributeName:[UIFont systemFontOfSize:13], NSForegroundColorAttributeName:[UIColor colorWithWhite:0 alpha:0.35]}];
+    [attr appendAttributedString:[[NSAttributedString alloc] initWithString:name attributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:14], NSForegroundColorAttributeName:[UIColor colorWithWhite:0 alpha:0.85]}]];
+    [attr appendAttributedString:[[NSAttributedString alloc] initWithString:@"  ›" attributes:@{NSFontAttributeName:[UIFont systemFontOfSize:12], NSForegroundColorAttributeName:[UIColor colorWithWhite:0 alpha:0.2]}]];
     [self.voiceSelectBtn setAttributedTitle:attr forState:UIControlStateNormal];
     if (self.voiceTable) [self.voiceTable reloadData];
 }
@@ -386,14 +386,14 @@
     UILabel *pt = [[UILabel alloc] initWithFrame:CGRectMake(14, 9, W - 160, 22)];
     pt.text = @"选择音色";
     pt.font = [UIFont boldSystemFontOfSize:15];
-    pt.textColor = [UIColor colorWithWhite:1 alpha:0.9];
+    pt.textColor = [UIColor colorWithWhite:0 alpha:0.9];
     [header addSubview:pt];
 
     self.reloadBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     [self.reloadBtn setTitle:@"刷新" forState:UIControlStateNormal];
     self.reloadBtn.frame = CGRectMake(W - 68, 8, 54, 26);
     self.reloadBtn.titleLabel.font = [UIFont systemFontOfSize:12];
-    [self.reloadBtn setTitleColor:[UIColor colorWithWhite:1 alpha:0.5] forState:UIControlStateNormal];
+    [self.reloadBtn setTitleColor:[UIColor colorWithWhite:0 alpha:0.5] forState:UIControlStateNormal];
     [self.reloadBtn addTarget:self action:@selector(onReloadVoices) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:self.reloadBtn];
 
@@ -401,7 +401,7 @@
     [self.pickerBackBtn setTitle:@"返回" forState:UIControlStateNormal];
     self.pickerBackBtn.frame = CGRectMake(W - 128, 8, 52, 26);
     self.pickerBackBtn.titleLabel.font = [UIFont systemFontOfSize:12];
-    [self.pickerBackBtn setTitleColor:[UIColor colorWithWhite:1 alpha:0.5] forState:UIControlStateNormal];
+    [self.pickerBackBtn setTitleColor:[UIColor colorWithWhite:0 alpha:0.5] forState:UIControlStateNormal];
     [self.pickerBackBtn addTarget:self action:@selector(hidePicker) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:self.pickerBackBtn];
     [self.pickerView addSubview:header];
@@ -412,14 +412,14 @@
     self.searchBar.searchBarStyle = UISearchBarStyleMinimal;
     self.searchBar.delegate = self;
     self.searchBar.barTintColor = [UIColor clearColor];
-    self.searchBar.tintColor = [UIColor colorWithWhite:1 alpha:0.5];
+    self.searchBar.tintColor = [UIColor colorWithWhite:0 alpha:0.5];
     [self.pickerView addSubview:self.searchBar];
     y += 38;
 
     UILabel *sl = [[UILabel alloc] initWithFrame:CGRectMake(14, y, 36, 22)];
     sl.text = @"语速";
     sl.font = [UIFont systemFontOfSize:12];
-    sl.textColor = [UIColor colorWithWhite:1 alpha:0.4];
+    sl.textColor = [UIColor colorWithWhite:0 alpha:0.4];
     [self.pickerView addSubview:sl];
     self.speedSlider = [[UISlider alloc] initWithFrame:CGRectMake(52, y, W - 126, 22)];
     self.speedSlider.minimumValue = 0.5f;
@@ -430,7 +430,7 @@
     self.speedLabel = [[UILabel alloc] initWithFrame:CGRectMake(W - 66, y, 52, 22)];
     self.speedLabel.font = [UIFont systemFontOfSize:12];
     self.speedLabel.textAlignment = NSTextAlignmentRight;
-    self.speedLabel.textColor = [UIColor colorWithWhite:1 alpha:0.5];
+    self.speedLabel.textColor = [UIColor colorWithWhite:0 alpha:0.5];
     [self updateSpeedLabel];
     [self.pickerView addSubview:self.speedLabel];
     y += 28;
@@ -438,7 +438,7 @@
     UILabel *el = [[UILabel alloc] initWithFrame:CGRectMake(14, y, 36, 22)];
     el.text = @"语气";
     el.font = [UIFont systemFontOfSize:12];
-    el.textColor = [UIColor colorWithWhite:1 alpha:0.4];
+    el.textColor = [UIColor colorWithWhite:0 alpha:0.4];
     [self.pickerView addSubview:el];
     self.emotionSeg = [[UISegmentedControl alloc] initWithItems:@[@"默认", @"生气", @"愤怒", @"快乐", @"开朗"]];
     self.emotionSeg.frame = CGRectMake(52, y, W - 66, 28);
@@ -450,7 +450,7 @@
     self.pickerHintLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, y, W - 28, 16)];
     self.pickerHintLabel.text = @"语速/语气只对千问音色生效";
     self.pickerHintLabel.font = [UIFont systemFontOfSize:10];
-    self.pickerHintLabel.textColor = [UIColor colorWithWhite:1 alpha:0.2];
+    self.pickerHintLabel.textColor = [UIColor colorWithWhite:0 alpha:0.2];
     [self.pickerView addSubview:self.pickerHintLabel];
     y += 18;
 
@@ -461,7 +461,7 @@
     self.sectionLabel.text = [NSString stringWithFormat:
         @"千问 %lu 个 · 我的 %lu 个", (unsigned long)nQwen, (unsigned long)nMine];
     self.sectionLabel.font = [UIFont boldSystemFontOfSize:13];
-    self.sectionLabel.textColor = [UIColor colorWithWhite:1 alpha:0.6];
+    self.sectionLabel.textColor = [UIColor colorWithWhite:0 alpha:0.6];
     [self.pickerView addSubview:self.sectionLabel];
     y += 22;
 
@@ -522,16 +522,16 @@
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:cid];
         cell.backgroundColor = [UIColor clearColor];
         cell.textLabel.font = [UIFont systemFontOfSize:15];
-        cell.textLabel.textColor = [UIColor colorWithWhite:1 alpha:0.85];
+        cell.textLabel.textColor = [UIColor colorWithWhite:0 alpha:0.85];
         cell.detailTextLabel.font = [UIFont systemFontOfSize:11];
-        cell.detailTextLabel.textColor = [UIColor colorWithWhite:1 alpha:0.25];
+        cell.detailTextLabel.textColor = [UIColor colorWithWhite:0 alpha:0.25];
     }
     NSDictionary *d = self.filteredVoices[(NSUInteger)indexPath.row];
     cell.textLabel.text = d[@"name"] ?: d[@"voiceID"];
     cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ · %@",
         ([d[@"provider"] integerValue] == 1) ? @"千问" : @"克隆", d[@"model"] ?: @""];
     cell.accessoryType = [d[@"voiceID"] isEqualToString:self.selectedVoiceID] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
-    cell.tintColor = [UIColor colorWithWhite:1 alpha:0.6];
+    cell.tintColor = [UIColor colorWithWhite:0 alpha:0.6];
     return cell;
 }
 - (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)indexPath {

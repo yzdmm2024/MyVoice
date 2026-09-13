@@ -1,8 +1,8 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 2.8.0
+Version: 2.8.1
 Architecture: iphoneos-arm64
-Description: 节约时间，打字即可。
+Description: 节约时间，打字即可。修复录音停止无响应 + 文件选取权限 + 界面颜色可读性。
 Maintainer: yzdmm2024
 Author: yzdmm2024
 Section: Tweaks

@@ -188,11 +188,14 @@
   didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
     if (!urls.count) return;
     NSURL *src = urls.firstObject;
+    // ★ 修复：安全作用域资源必须先 startAccessing 才能读取
+    [src startAccessingSecurityScopedResource];
     NSString *ext = src.pathExtension.length ? src.pathExtension.lowercaseString : @"wav";
     NSString *dst = [NSTemporaryDirectory() stringByAppendingPathComponent:
                      [NSString stringWithFormat:@"mv_upload_%@.%@", [[NSUUID UUID] UUIDString], ext]];
     NSError *e = nil;
     [[NSFileManager defaultManager] copyItemAtURL:src toURL:[NSURL fileURLWithPath:dst] error:&e];
+    [src stopAccessingSecurityScopedResource];
     if (e) { self.statusLabel.text = [@"读取文件失败：" stringByAppendingString:e.localizedDescription]; return; }
     self.uploadPath = dst;
     self.uploadName = src.lastPathComponent;
@@ -233,11 +236,29 @@
 }
 
 - (void)toggleRec {
-    if (self.recorder && self.recorder.isRecording) { [self.recorder stop]; return; }
+    if (self.recorder && self.recorder.isRecording) {
+        [self.recorder stop];
+        // 安全超时：delegate 2 秒不回调就手动处理
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            if (self.statusLabel.text.length && [self.statusLabel.text containsString:@"录音中…"]) {
+                self.statusLabel.text = @"录音停止超时，请重试";
+                [self.recBtn setTitle:@"开始录音（15~30秒安静干声）" forState:UIControlStateNormal];
+            }
+        });
+        return;
+    }
     if (!MVAPIKey().length) {
         self.statusLabel.text = @"⚠️ 录音复刻需要先在 设置→我的语音 填写 DashScope API Key";
         return;
     }
+    // ★ 激活 AudioSession（QQ 进程里必须，否则 AVAudioRecorder 不工作）
+    NSError *se = nil;
+    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord
+                                            mode:AVAudioSessionModeDefault
+                                         options:0 error:&se];
+    [[AVAudioSession sharedInstance] setActive:YES error:&se];
+
     NSError *e = nil;
     NSDictionary *set = @{
         AVSampleRateKey: @24000,
@@ -252,7 +273,10 @@
                                                  settings:set error:&e];
     if (e || !self.recorder) { self.statusLabel.text = [@"录音初始化失败：" stringByAppendingString:e.localizedDescription]; return; }
     self.recorder.delegate = self;
-    [self.recorder record];
+    if (![self.recorder record]) {
+        self.statusLabel.text = @"录音启动失败（音频会话冲突）";
+        return;
+    }
     [self.recBtn setTitle:@"停止录音" forState:UIControlStateNormal];
     self.statusLabel.text = @"录音中…";
 }
