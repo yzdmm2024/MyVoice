@@ -496,7 +496,7 @@
 - (void)onInstructionTap {
     NSString *cur = MVGetStr(@"cosyInstruction");
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"自定义指令"
-        message:@"用一句自然语言描述"怎么念"，最多 100 字符。\n"
+        message:@"用一句自然语言描述「怎么念」，最多 100 字符。\n"
                  "例：用慵懒随意的语气说，语速慢一点，句尾别拖长。\n"
                  "注意：这改的是语气/情绪/语速，改不了口音 —— 方言请用左边的「方言」。"
         preferredStyle:UIAlertControllerStyleAlert];
