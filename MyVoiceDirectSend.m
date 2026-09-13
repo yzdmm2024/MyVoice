@@ -288,7 +288,6 @@ static BOOL MVQQStartRecordHook(id self, SEL _cmd) {
 + (void)setQQMgrStartedByUs:(BOOL)v {
     @synchronized([MyVoiceDirectSend class]) { g_mvQQMgrStartedByUs = v; }
 }
-}
 
 + (BOOL)available {
     if ([self qqAvailable]) return YES;
