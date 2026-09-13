@@ -2,7 +2,7 @@ Package: com.yzdmm2024.myvoice
 Name: 我的语音
 Version: 2.7.0
 Architecture: iphoneos-arm64
-Description: 节约时间，打字即可。支持 QQ，选音色自动发出，免配置开箱即用。
+Description: 节约时间，打字即可。
 Maintainer: yzdmm2024
 Author: yzdmm2024
 Section: Tweaks
