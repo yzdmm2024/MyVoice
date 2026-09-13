@@ -28,6 +28,9 @@
 // 清空合成缓存（换 Key / 换音色后可调）
 + (void)clearSynthesisCache;
 
+// ★ 2.8.7：缓存统计（count 条 / bytes 字节），给面板「缓存管理」用
++ (NSDictionary*)cacheStats;
+
 // 声音复刻：把一段参考音频（本地文件路径）上传 OSS → 调 customization → 回调 voice_id
 - (void)cloneVoiceWithName:(NSString*)name
               referenceAudioPath:(NSString*)path

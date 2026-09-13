@@ -93,9 +93,11 @@ static NSMutableArray      *gMVTTSCacheKeys = nil;   // 简易 LRU 顺序（末�
 static NSString* MVTTSCacheKey(NSString *text, NSString *voiceID) {
     if (!text.length) return nil;
     if (MVTTSProvider() == 1) {
+        // ★ 2.8.7：key 里放真正会发出去的 instructions（旧版放的是无效的 emotion/speed，
+        //   改了风格会命中旧音频 —— 又是一次"调了没用"）。
         return [NSString stringWithFormat:@"q|%@|%@|%@|%.2f|%@",
                 MVQwenModel(), (voiceID.length ? voiceID : MVQwenVoice()),
-                MVQwenEmotion(), MVQwenSpeed(), text];
+                MVQwenInstructions() ?: @"", MVQwenSpeed(), text];
     }
     // ★ 2.8.5：key 必须带上全部表现参数。
     //   旧版只含 model|voiceID|text —— 改了风格/语速/音高仍然命中旧音频，
@@ -136,6 +138,15 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
         [gMVTTSCacheKeys removeAllObjects];
     }
     MVLog(@"[cache] 合成缓存已清空");
+}
+
+// ★ 2.8.7：缓存统计（面板「缓存管理」显示 条数 / 占用）
++ (NSDictionary*)cacheStats {
+    @synchronized(@"mv-tts-cache") {
+        NSUInteger bytes = 0;
+        for (NSData *d in gMVTTSCache.allValues) bytes += d.length;
+        return @{ @"count": @(gMVTTSCache.count), @"bytes": @(bytes) };
+    }
 }
 
 #pragma mark - TTS（合成）
@@ -224,18 +235,26 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
     if (!text.length)   { completion(nil, MVErr(@"文字为空")); return; }
     NSString *voice = voiceID.length ? voiceID : MVQwenVoice();
     NSString *model = MVQwenModel();
-    NSString *emotion = MVQwenEmotion();
-    double speed = MVQwenSpeed();
-
     NSString *url = @"https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
     NSMutableDictionary *input = [NSMutableDictionary dictionaryWithDictionary:@{
         @"text": text,
         @"voice": voice,
         @"language_type": @"Auto"
     }];
-    // 千问 3-tts-flash 支持 emotion/speed；若服务端不认这两个键会被忽略。
-    if (![emotion isEqualToString:@"default"]) input[@"emotion"] = emotion;
-    if (fabs(speed - 1.0) > 0.01) input[@"speed"] = @(speed);
+    // ★ 2.8.7：删掉 input.emotion / input.speed —— 这两个【不是本接口的合法字段】，
+    //   服务端静默忽略。这就是用户反馈"语速调了没反应、语气段控更没反应"的真因。
+    //   千问的调节只能走 instructions，且仅 qwen3-tts-instruct-flash 系列认这个参数。
+    NSString *inst = MVQwenInstructions();
+    if (inst.length) {
+        if (MVQwenSupportsInstructions(model)) {
+            input[@"instructions"] = inst;
+            input[@"optimize_instructions"] = @YES;   // 让服务端再润色一遍，表现力更好
+            MVLog(@"[qwen] instructions=%@", inst);
+        } else {
+            MVLog(@"[qwen] ⚠️ 模型 %@ 不支持 instructions —— 风格/语速不会生效。"
+                  @"在面板「千问模型」里切到 qwen3-tts-instruct-flash（可调版）即可。", model);
+        }
+    }
 
     NSDictionary *body = @{
         @"model": model,
@@ -261,7 +280,7 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
         if (code != 200) {
             NSString *msg = [[NSString alloc] initWithData:d?:[NSData data] encoding:NSUTF8StringEncoding];
             MVLog(@"[qwen] TTS HTTP %ld body=%@", (long)code, msg);
-            completion(nil, MVErr([NSString stringWithFormat:@"千问 TTS 失败 HTTP %ld：%@", (long)code, msg]));
+            completion(nil, MVErr(MVFriendlyAPIError(code, msg, @"千问合成失败")));
             return;
         }
         NSError *je = nil;
@@ -280,7 +299,9 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
             NSString *audioURL = audio[@"url"];
             if (!audioURL.length) {
                 MVLog(@"[qwen] TTS 未返回音频：%@", j);
-                completion(nil, MVErr(@"千问 TTS 未返回音频 URL（多为音色/模型无效或账号未开通，请换一个音色试试）"));
+                completion(nil, MVErr(@"千问没有返回音频。多数是音色与模型不匹配，或该模型未开通：\n"
+                    @"标准版(qwen3-tts-flash)与可调版(qwen3-tts-instruct-flash)支持的音色可能不同，\n"
+                    @"换一个音色、或在面板「千问模型」里切一个版本再试。"));
                 return;
             }
             // 二次下载 wav
@@ -374,7 +395,7 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
         if (code != 200) {
             NSString *msg = [[NSString alloc] initWithData:d?:[NSData data] encoding:NSUTF8StringEncoding];
             MVLog(@"[cloud] TTS HTTP %ld body=%@", (long)code, msg);
-            completion(nil, MVErr([NSString stringWithFormat:@"TTS 失败 HTTP %ld：%@", (long)code, msg]));
+            completion(nil, MVErr(MVFriendlyAPIError(code, msg, @"TTS 失败")));
             return;
         }
         // ★ 2.4.3：真机抓包确认响应结构是 output.audio.url（http 链接，24h 有效），
@@ -653,7 +674,7 @@ static inline uint32_t MVrd32(const uint8_t *p) {
         if (code != 200) {
             NSString *msg = [[NSString alloc] initWithData:d ?: [NSData data] encoding:NSUTF8StringEncoding];
             MVLog(@"[cloud] 复刻 HTTP %ld %@", (long)code, msg);
-            completion(nil, MVErr([NSString stringWithFormat:@"复刻失败 %ld：%@", (long)code, msg]));
+            completion(nil, MVErr(MVFriendlyAPIError(code, msg, @"克隆失败")));
             return;
         }
         NSDictionary *j = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];

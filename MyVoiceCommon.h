@@ -293,31 +293,41 @@ static inline NSInteger MVCosyStyle(void) {
     id v = MVGet(@"cosyStyle");
     return v ? [v integerValue] : 0;
 }
-static inline NSArray* MVCosyStyleNames(void) {
-    return @[@"默认", @"人情味", @"标准腔", @"慢语速", @"亲切", @"活泼"];
+// ★ 2.8.7：风格表改成 8 档并与千问共用（0..7），并抽出 MVStyleInstruction(idx) ——
+//   千问那条分支要写的是自己的 qwenStyle，所以不能再用"读 cosyStyle"的旧封装。
+static inline NSArray* MVStyleNames(void) {
+    return @[@"默认", @"人情味", @"标准腔", @"慢语速", @"亲切", @"活泼", @"生气", @"快乐"];
 }
-// 每种风格推荐的语速档位（0 = 不干预，保留用户手动设的值）。
-// 「一键」就该一步到位：只改 instruction 的话，"慢语速"听感差别不够明显。
-static inline double MVCosyStyleRate(NSInteger idx) {
+static inline NSArray* MVCosyStyleNames(void) { return MVStyleNames(); }
+// 每种风格推荐的语速档位（0 = 不干预）。「一键」就该一步到位。
+static inline double MVStyleRate(NSInteger idx) {
     switch (idx) {
         case 1: return 0.95;   // 人情味：略慢一点更自然
-        case 2: return 1.00;   // 标准腔：正常速度
+        case 2: return 1.00;   // 标准腔
         case 3: return 0.80;   // 慢语速
         case 4: return 0.95;   // 亲切
-        case 5: return 1.05;   // 活泼：略快
+        case 5: return 1.05;   // 活泼
+        case 6: return 1.00;   // 生气
+        case 7: return 1.05;   // 快乐
         default: return 0.0;
     }
 }
-// 一键风格 → 语气句（拆出来，便于和方言叠加）
-static inline NSString* MVCosyStyleInstruction(void) {
-    switch (MVCosyStyle()) {
+static inline double MVCosyStyleRate(NSInteger idx) { return MVStyleRate(idx); }
+// 风格 → 语气句（按索引，不读 prefs，便于千问/克隆共用）
+static inline NSString* MVStyleInstruction(NSInteger idx) {
+    switch (idx) {
         case 1: return @"用自然随意的日常聊天语气说，像跟朋友发语音一样，语速自然，不要播音腔";
         case 2: return @"用标准播报腔，字正腔圆，语气平稳，吐字清晰";
         case 3: return @"语速放慢，吐字清晰，句子之间自然停顿";
         case 4: return @"语气温和亲切，像长辈在关心人，语速舒缓";
         case 5: return @"语气活泼俏皮，带一点笑意，节奏轻快";
+        case 6: return @"语气带着一点生气和不耐烦";
+        case 7: return @"语气快乐开朗，情绪饱满";
         default: return nil;
     }
+}
+static inline NSString* MVCosyStyleInstruction(void) {
+    return MVStyleInstruction(MVCosyStyle());
 }
 // ★ 2.8.6：instruction 改成「方言句 + 语气句」两段拼接。
 //   官方只有一个 instruction 字段，但方言和语气是两个维度，不该互相顶掉：
@@ -340,8 +350,9 @@ static inline NSString* MVCosyInstruction(void) {
     }
     if (!parts.count) return nil;
     NSString *out = [parts componentsJoinedByString:@""];
-    if (out.length > 100) out = [out substringToIndex:100];   // 官方上限 100 字符
-    return out;
+    // ★ 2.8.7：官方是"100 字符，汉字（含日韩汉字）按 2 个字符计算" ——
+    //   旧版按 NSString.length 截，一段 60 汉字的语气句实际算 120 → 直接 400。
+    return MVInstructionTrim(out, 100);
 }
 // 语速 0.5~2.0：没单独设过就回落到千问语速，老用户行为不变
 static inline double MVCosyRate(void) {
@@ -638,6 +649,207 @@ static inline NSArray* MVQwenVoiceList(void) {
         @{@"name": @"小婉(女·柔和)",   @"voiceID": @"Seren",    @"model": @"qwen3-tts-flash"},
         @{@"name": @"少女阿月(女)",    @"voiceID": @"Stella",   @"model": @"qwen3-tts-flash"},
 ];
+}
+
+#pragma mark - ★ 2.8.7 千问可调 / 预设 / 模板 / 最近使用 / 友好报错
+
+// ===== 千问(Qwen-TTS)为什么"调了没反应"——官方 2026-09 文档，端点不可混用 =====
+//  · Qwen-TTS（qwen3-tts-flash / qwen3-tts-instruct-flash）走
+//    dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation，
+//    input 只认：text / voice / language_type / instructions / optimize_instructions。
+//    → 旧版塞的 input.emotion、input.speed 是【非法字段】，服务端静默忽略；
+//      而 qwen3-tts-flash 本身也不支持任何表现参数，只有 qwen3-tts-instruct-flash 认 instructions。
+//      这就是"语速滑块没反应、语气段控更没反应"的真因。
+//  · CosyVoice / Qwen-Audio-TTS 走 maas 端点，参数名是 instruction（单数、100 字符、汉字算 2）。
+//  结论：千问的调节一律走「instructions 自然语言」，没有 rate/pitch/volume 这类数值参数。
+static inline NSInteger MVQwenStyle(void) {
+    id v = MVGet(@"qwenStyle");
+    return v ? [v integerValue] : 0;
+}
+static inline NSString* MVQwenCustomInstruction(void) { return MVGetStr(@"qwenInstruction"); }
+// 千问模型是否认 instructions（只有 qwen3-tts-instruct-flash 系列认）
+static inline BOOL MVQwenSupportsInstructions(NSString *model) {
+    return [model hasPrefix:@"qwen3-tts-instruct-flash"];
+}
+static inline NSArray* MVQwenModelChoices(void) {
+    return @[@"qwen3-tts-flash", @"qwen3-tts-instruct-flash"];
+}
+static inline NSString* MVQwenModelLabel(NSString *m) {
+    return MVQwenSupportsInstructions(m) ? @"可调版" : @"标准版";
+}
+// 语速滑块 → 语言描述（千问没有 rate 参数，只能写进指令里）
+static inline NSString* MVQwenSpeedPhrase(void) {
+    double sp = MVQwenSpeed();
+    if (sp <= 0.80) return @"语速放慢，句子之间自然停顿";
+    if (sp <= 0.92) return @"语速稍慢一点";
+    if (sp >= 1.18) return @"语速稍快一些";
+    if (sp >= 1.05) return @"语速轻快";
+    return nil;
+}
+// 千问最终 instructions：自定义指令 > 一键风格；语速短语始终叠加
+static inline NSString* MVQwenInstructions(void) {
+    NSMutableArray *parts = [NSMutableArray array];
+    NSString *custom = MVQwenCustomInstruction();
+    if (custom.length) [parts addObject:custom];
+    else {
+        NSString *st = MVStyleInstruction(MVQwenStyle());
+        if (st.length) [parts addObject:st];
+    }
+    NSString *sp = MVQwenSpeedPhrase();
+    if (sp.length) [parts addObject:sp];
+    if (!parts.count) return nil;
+    NSString *out = [parts componentsJoinedByString:@"，"];
+    if (out.length > 300) out = [out substringToIndex:300];   // 官方上限 1600 token，留足余量
+    return out;
+}
+
+// ===== 预设：音色 + 风格 + 方言 整套切换 =====
+static inline NSArray* MVVoicePresets(void) {
+    id v = MVGet(@"voicePresets");
+    return [v isKindOfClass:[NSArray class]] ? v : @[];
+}
+static inline void MVSaveVoicePresets(NSArray *a) { MVSetShared(@"voicePresets", a ?: @[]); }
+// 抓当前面板状态成一个预设
+static inline NSDictionary* MVCaptureVoicePreset(NSString *name) {
+    NSInteger prov = MVTTSProvider();
+    NSMutableDictionary *p = [NSMutableDictionary dictionary];
+    p[@"name"] = name.length ? name : @"未命名";
+    p[@"provider"] = @(prov);
+    if (prov == 1) {
+        p[@"qwenVoice"]   = MVQwenVoice();
+        p[@"qwenModel"]   = MVQwenModel();
+        p[@"style"]       = @(MVQwenStyle());
+        p[@"instruction"] = MVQwenCustomInstruction() ?: @"";
+        p[@"qwenSpeed"]   = @(MVQwenSpeed());
+    } else {
+        p[@"voiceID"]     = MVGetStr(@"currentVoiceID");   // 直接读键：MVCurrentVoiceID 定义在本块之后
+        p[@"style"]       = @(MVCosyStyle());
+        p[@"dialect"]     = MVGetStr(@"cosyDialect") ?: @"";
+        p[@"instruction"] = MVGetStr(@"cosyInstruction") ?: @"";
+        p[@"rate"]        = @(MVCosyRate());
+        p[@"pitch"]       = @(MVCosyPitch());
+    }
+    return p;
+}
+// 应用一个预设（整套写回）
+static inline void MVApplyVoicePreset(NSDictionary *p) {
+    if (![p isKindOfClass:[NSDictionary class]]) return;
+    NSInteger prov = [p[@"provider"] integerValue];
+    MVSetShared(@"ttsProvider", @(prov));
+    if (prov == 1) {
+        if ([p[@"qwenVoice"] length]) MVSetShared(@"qwenVoice", p[@"qwenVoice"]);
+        if ([p[@"qwenModel"] length]) MVSetShared(@"qwenModel", p[@"qwenModel"]);
+        if (p[@"style"])       MVSetShared(@"qwenStyle", p[@"style"]);
+        if (p[@"instruction"]) MVSetShared(@"qwenInstruction", p[@"instruction"]);
+        if (p[@"qwenSpeed"])   MVSetShared(@"qwenSpeed", p[@"qwenSpeed"]);
+    } else {
+        if ([p[@"voiceID"] length]) MVSetShared(@"currentVoiceID", p[@"voiceID"]);
+        if (p[@"style"]) MVSetShared(@"cosyStyle", p[@"style"]);
+        MVSetShared(@"cosyDialect", p[@"dialect"] ?: @"");
+        MVSetShared(@"cosyInstruction", p[@"instruction"] ?: @"");
+        if (p[@"rate"])  MVSetShared(@"cosyRate", p[@"rate"]);
+        if (p[@"pitch"]) MVSetShared(@"cosyPitch", p[@"pitch"]);
+    }
+}
+
+// ===== 常用文本模板 =====
+static inline NSArray* MVDefaultTemplates(void) {
+    return @[
+        @{@"title": @"稍后回你", @"text": @"稍等，我在忙，一会儿回你"},
+        @{@"title": @"收到",     @"text": @"收到，马上处理"},
+        @{@"title": @"好的",     @"text": @"好的，没问题"},
+        @{@"title": @"马上到",   @"text": @"我马上到"},
+        @{@"title": @"改天吧",   @"text": @"今天不方便，改天吧"},
+    ];
+}
+static inline NSArray* MVTextTemplates(void) {
+    id v = MVGet(@"textTemplates");
+    if ([v isKindOfClass:[NSArray class]] && [v count]) return v;
+    return MVDefaultTemplates();
+}
+static inline void MVSaveTextTemplates(NSArray *a) { MVSetShared(@"textTemplates", a ?: @[]); }
+
+// ===== 最近使用（MRU，最多 12 个 voiceID）=====
+static inline NSArray* MVRecentVoices(void) {
+    id v = MVGet(@"recentVoices");
+    return [v isKindOfClass:[NSArray class]] ? v : @[];
+}
+static inline void MVMarkVoiceUsed(NSString *vid) {
+    if (!vid.length) return;
+    NSMutableArray *a = [NSMutableArray arrayWithArray:MVRecentVoices()];
+    [a removeObject:vid];
+    [a insertObject:vid atIndex:0];
+    while (a.count > 12) [a removeLastObject];
+    MVSetShared(@"recentVoices", a);
+}
+
+// ===== 友好报错：把 DashScope 的 code / HTTP 码翻成"人话 + 怎么办" =====
+static inline NSString* MVFriendlyAPIError(NSInteger code, NSString *body, NSString *stage) {
+    NSString *raw = body ?: @"";
+    NSString *errCode = @"";
+    NSString *errMsg  = @"";
+    NSData *d = [raw dataUsingEncoding:NSUTF8StringEncoding];
+    if (d.length) {
+        id j = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+        if ([j isKindOfClass:[NSDictionary class]]) {
+            if ([j[@"code"] isKindOfClass:[NSString class]])    errCode = j[@"code"];
+            if ([j[@"message"] isKindOfClass:[NSString class]]) errMsg  = j[@"message"];
+        }
+    }
+    NSString *why = nil;
+    if ([errCode containsString:@"InvalidApiKey"] || code == 401)
+        why = @"API Key 无效或已失效（去 设置→我的语音 重填北京地域的 DashScope Key）";
+    else if ([errCode containsString:@"AccessDenied"] || [errCode containsString:@"Model.AccessDenied"] || code == 403)
+        why = @"该模型没有权限（去百炼控制台开通对应模型，或换一个模型）";
+    else if ([errCode containsString:@"Arrearage"])
+        why = @"账户欠费或免费额度用尽（去百炼控制台充値）";
+    else if ([errCode containsString:@"Throttling"] || code == 429)
+        why = @"调用太频繁（等几秒再试）";
+    else if ([errCode containsString:@"DataInspection"])
+        why = @"内容审核未通过（换成正常说话的文字或音频）";
+    else if ([errCode containsString:@"UnsupportedModel"] || ([errMsg containsString:@"model"] && code == 400))
+        why = @"模型名不支持（在「标准版 / 可调版」之间换一个试试）";
+    else if (code == 400)
+        why = @"参数不合规（音色、模型或参考音频不符合官方要求）";
+    else if (code == 404)
+        why = @"接口路径不存在（多为地域不对：本插件需用北京地域的 Key）";
+    else if (code >= 500)
+        why = @"服务端临时故障（稍后重试）";
+    else
+        why = [NSString stringWithFormat:@"服务端拒绝（HTTP %ld）", (long)code];
+    NSString *tail = errMsg.length ? errMsg : raw;
+    if (tail.length > 200) tail = [tail substringToIndex:200];
+    return [NSString stringWithFormat:@"%@：%@%@", stage ?: @"失败", why,
+            tail.length ? [NSString stringWithFormat:@"\n服务端原文：%@", tail] : @""];
+}
+
+// ===== PCM → WAV（列表内试听要用 AVAudioPlayer 播，必须带容器头）=====
+static inline void MVAppendLE32(NSMutableData *d, uint32_t v) {
+    uint8_t b[4] = { (uint8_t)(v & 0xFF), (uint8_t)((v >> 8) & 0xFF),
+                     (uint8_t)((v >> 16) & 0xFF), (uint8_t)((v >> 24) & 0xFF) };
+    [d appendBytes:b length:4];
+}
+static inline void MVAppendLE16(NSMutableData *d, uint16_t v) {
+    uint8_t b[2] = { (uint8_t)(v & 0xFF), (uint8_t)((v >> 8) & 0xFF) };
+    [d appendBytes:b length:2];
+}
+static inline NSData* MVWavFromPCM(NSData *pcm, uint32_t sr, uint16_t ch, uint16_t bits) {
+    if (!pcm.length) return nil;
+    NSMutableData *o = [NSMutableData dataWithCapacity:pcm.length + 44];
+    [o appendBytes:"RIFF" length:4];
+    MVAppendLE32(o, (uint32_t)(36 + pcm.length));
+    [o appendBytes:"WAVEfmt " length:8];
+    MVAppendLE32(o, 16);
+    MVAppendLE16(o, 1);                       // PCM
+    MVAppendLE16(o, ch);
+    MVAppendLE32(o, sr);
+    MVAppendLE32(o, sr * ch * bits / 8);
+    MVAppendLE16(o, (uint16_t)(ch * bits / 8));
+    MVAppendLE16(o, bits);
+    [o appendBytes:"data" length:4];
+    MVAppendLE32(o, (uint32_t)pcm.length);
+    [o appendData:pcm];
+    return o;
 }
 
 // DashScope（北京地域）凭证

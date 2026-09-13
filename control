@@ -1,8 +1,8 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 2.8.6
+Version: 2.8.7
 Architecture: iphoneos-arm64
-Description: 节约时间，打字即可。★ 克隆音色现在能说方言：音色列表分「千问/克隆」两节；新增「方言」一键（CosyVoice 17 种 / Qwen 21 种含湖南话）与「自定义指令」输入框；复刻模型可选（Qwen 方言最全）；参考音频时长校验（3~30 秒）；克隆成功就地试听；复刻补 language_hints / 取音长度 / 降噪开关。另有语速/音高/一键风格与文本「一键纠偏」。
+Description: 节约时间，打字即可。★ 真修千问「调了没反应」：旧版把 emotion/speed 塞进请求体，而这两个不是 Qwen-TTS 接口的合法字段，被服务端静默忽略——现在千问统一走 instructions（仅可调版模型认），面板新增「千问模型」标准版/可调版切换。另新增：音色列表内一键云端试听、克隆失败给具体原因、「音色+风格+方言」预设一键切换、常用文本模板、缓存管理入口、音色按最近使用排序；音色分节不再用悬浮表头（原先会挡住列表）。
 Maintainer: yzdmm2024
 Author: yzdmm2024
 Section: Tweaks
