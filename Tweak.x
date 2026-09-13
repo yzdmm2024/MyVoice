@@ -70,7 +70,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.6.0（QQ 全自动直发：operator didTriggeredRecord + QQPttRecorder stopRecord）");
+        MVLog(@"载入 我的语音 v2.6.1（QQ 直发修复：删除遗留 isStartSuccess 误杀检查）");
         MVLog(@"宿主 App：%@（版本 %@）",
               [NSBundle mainBundle].bundleIdentifier ?: @"?",
               [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");
