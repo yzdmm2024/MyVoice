@@ -230,11 +230,17 @@ static id gAS = nil;      // AudioSender
 
 #pragma mark - 可用性 / 诊断
 
-+ (BOOL)available {
-    // ★ 2.5.0：QQ 的录音/发送管线完全不同（NTAIOPttRecordOperator 等），
-    //   微信的 RecordController 探测在 QQ 里必然失败，直接快速回退手动按住。
++ (BOOL)qqAvailable {
+    // ★ 2.5.1：QQ 直发——QQChatVoicePttRecorderManager 可独立实例化，
+    //   frida 实测：alloc.init → startRecord（立即创建 AudioQueue，劫持点）→
+    //   stopRecord:YES（BOOL 语义按发送处理）。status: 0=空闲 2=录音中。
     NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
-    if ([bid rangeOfString:@"tencent.mqq"].location != NSNotFound) return NO;
+    return ([bid rangeOfString:@"tencent.mqq"].location != NSNotFound &&
+            NSClassFromString(@"QQChatVoicePttRecorderManager") != nil);
+}
+
++ (BOOL)available {
+    if ([self qqAvailable]) return YES;
     if ([NSThread isMainThread]) return ([self recordController] != nil || [self audioSender] != nil);
     __block BOOL ok = NO;
     dispatch_sync(dispatch_get_main_queue(), ^{
@@ -292,10 +298,21 @@ static id gAS = nil;      // AudioSender
     id rc = [MyVoiceDirectSend recordController];
     id as = [MyVoiceDirectSend audioSender];
 
-    // ---- 选启动入口：优先 RecordController（这是"聊天页录音"的正规入口） ----
+    // ---- 选启动入口：★ 2.5.1 QQ 走自己的 PttRecorderManager；微信优先 RecordController ----
     id target = nil; NSString *startSel = nil; id stopTarget = nil; BOOL stopIsSender = NO;
+    BOOL qqMode = [MyVoiceDirectSend qqAvailable];
 
-    if (rc && [rc respondsToSelector:NSSelectorFromString(@"StartRecordingFromUsr:ToUsr:UserInfo:")]) {
+    if (qqMode) {
+        Class MC = NSClassFromString(@"QQChatVoicePttRecorderManager");
+        target = [[MC alloc] init];
+        stopTarget = target;
+        startSel = @"startRecord";
+        MVLog(@"[direct] QQ 模式：新建 PttRecorderManager %p", target);
+    }
+
+    if (qqMode) {
+        // 入口已在上面选定
+    } else if (rc && [rc respondsToSelector:NSSelectorFromString(@"StartRecordingFromUsr:ToUsr:UserInfo:")]) {
         target = rc; startSel = @"StartRecordingFromUsr:ToUsr:UserInfo:";
     } else if (as && [as respondsToSelector:NSSelectorFromString(@"StartRecordFrom:ToUser:UserInfo:")]) {
         target = as; startSel = @"StartRecordFrom:ToUser:UserInfo:";
@@ -306,7 +323,9 @@ static id gAS = nil;      // AudioSender
     }
 
     // ---- 选停止入口：优先 AudioSender 的**无参** StopRecord（实测存在，零歧义） ----
-    if (as && [as respondsToSelector:NSSelectorFromString(@"StopRecord")]) {
+    if (qqMode) {
+        // QQ：stopRecord: 带一个 BOOL（按「发送」语义处理）；走专用停止分支
+    } else if (as && [as respondsToSelector:NSSelectorFromString(@"StopRecord")]) {
         stopTarget = as; stopIsSender = YES;
     } else if (rc && [rc respondsToSelector:NSSelectorFromString(@"StopRecordingInternal:")]) {
         stopTarget = rc;
@@ -364,7 +383,11 @@ static id gAS = nil;      // AudioSender
 }
 
 // 停止并发送：优先无参 StopRecord（AudioSender）；退化到 RecordController 的停止方法
-+ (NSString*)stopWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc {
++ (NSString*)stopWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc qqMode:(BOOL)qqMode {
+    if (qqMode && stopTarget) {
+        MVInvoke(stopTarget, @"stopRecord:", @[@YES]);   // BOOL=YES=发送
+        return @"QQ PttRecorderManager -stopRecord:YES";
+    }
     if (stopTarget) {
         if (isSender) {
             MVInvoke(stopTarget, @"StopRecord", nil);
