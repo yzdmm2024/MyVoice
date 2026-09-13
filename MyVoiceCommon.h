@@ -313,6 +313,21 @@ static inline double MVStyleRate(NSInteger idx) {
     }
 }
 static inline double MVCosyStyleRate(NSInteger idx) { return MVStyleRate(idx); }
+// ★ 2.8.7：指令长度按「汉字算 2」裁剪（CosyVoice / Qwen-Audio-TTS 官方规则）。
+//   必须定义在 MVCosyInstruction / MVQwenInstructions 之前 —— C 不允许"先用后定义"。
+static inline NSString* MVInstructionTrim(NSString *s, NSInteger limit) {
+    if (!s.length) return s;
+    NSInteger w = 0;
+    NSUInteger i = 0;
+    for (; i < s.length; i++) {
+        unichar c = [s characterAtIndex:i];
+        NSInteger step = (c >= 0x2E80) ? 2 : 1;    // 汉字/假名/谚文等宽字符
+        if (w + step > limit) break;
+        w += step;
+    }
+    return (i >= s.length) ? s : [s substringToIndex:i];
+}
+
 // 风格 → 语气句（按索引，不读 prefs，便于千问/克隆共用）
 static inline NSString* MVStyleInstruction(NSInteger idx) {
     switch (idx) {
