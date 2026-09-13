@@ -2,8 +2,8 @@
 #import "MyVoiceCommon.h"
 #import "MyVoiceResolver.h"
 #import "MyVoiceRecorder.h"
-#import <UIKit/UIKit.h>
-#import <AudioToolbox/AudioToolbox.h>
+#import "MyVoiceManager.h"
+import <AudioToolbox/AudioToolbox.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 
@@ -322,7 +322,13 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
                         id rec = [MyVoiceDirectSend stashedQQRecorder];
                         if (rec) {
                             MVInvoke(rec, @"stopRecord", nil);
+                            [[MyVoiceManager shared] toast:@"✅ 语音已发出，可以松手了"];
                             AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
+                            if (@available(iOS 10.0, *)) {
+                                UINotificationFeedbackGenerator *hg = [[UINotificationFeedbackGenerator alloc] init];
+                                [hg prepare];
+                                [hg notificationOccurred:UINotificationFeedbackTypeSuccess];
+                            }
                             MVLog(@"[autoStop] ✅ TTS 已喂完，自动 stopRecord + 震动（已发出可松手）");
                             [MyVoiceRecorder resetAfterSend:2.0];
                         }
