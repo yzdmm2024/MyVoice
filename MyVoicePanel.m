@@ -421,14 +421,14 @@
     self.searchBar.barTintColor = [UIColor clearColor];
     self.searchBar.tintColor = [UIColor colorWithWhite:0 alpha:0.5];
     [self.pickerView addSubview:self.searchBar];
-    y += 38;
+    y += 30;
 
-    UILabel *sl = [[UILabel alloc] initWithFrame:CGRectMake(14, y, 36, 22)];
+    UILabel *sl = [[UILabel alloc] initWithFrame:CGRectMake(14, y, 36, 18)];
     sl.text = @"语速";
-    sl.font = [UIFont systemFontOfSize:12];
+    sl.font = [UIFont systemFontOfSize:11];
     sl.textColor = [UIColor colorWithWhite:0 alpha:0.4];
     [self.pickerView addSubview:sl];
-    self.speedSlider = [[UISlider alloc] initWithFrame:CGRectMake(52, y, W - 126, 22)];
+    self.speedSlider = [[UISlider alloc] initWithFrame:CGRectMake(52, y, W - 126, 18)];
     self.speedSlider.minimumValue = 0.5f;
     self.speedSlider.maximumValue = 2.0f;
     self.speedSlider.value = (float)MVQwenSpeed();
