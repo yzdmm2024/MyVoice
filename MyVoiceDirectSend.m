@@ -377,9 +377,9 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
         // ★ 2.6.0：操作器由用户在该聊天按住说话键时扣留（didTriggeredRecord 钩子）。
         target = [MyVoiceDirectSend stashedQQOperator];
         if (!target) {
-            MVLog(@"[direct] ❌ QQ：尚无激活的 PttRecordOperator（本聊天还没按过说话键）");
-            [MyVoiceRecorder cancelFeed];
-            fin(NO, @"请先在本聊天按住一次说话键（可取消），激活后再次发送");
+            // ★ 2.6.2：TTS 装填保持有效 —— 用户随后手动按住说话，队列照样被喂 TTS
+            MVLog(@"[direct] QQ：尚无激活的 Operator —— 保持装填，等待手动按住");
+            fin(NO, @"语音已就绪：请现在按住「按住 说话」，松开即发出（2 分钟内有效）");
             return;
         }
         startSel = @"didTriggeredRecord";
@@ -433,10 +433,17 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
 
         if (!started && !done && waited >= 1200) {      // ≈1.2s 还没接管 → 判定失败
             [t invalidate];
-            MVLog(@"[direct] ❌ 1.2s 内录音未被接管，取消直发（不会残留录音）");
-            [MyVoiceRecorder cancelFeed];
-            [MyVoiceDirectSend cancelWith:stopTarget sender:stopIsSender fallbackRC:rc];
-            fin(NO, @"微信内部录音未按预期启动（版本接口可能不同）");
+            if (qqMode) {
+                // ★ 2.6.2：QQ 自动触发不生效时【保留装填】—— 用户手动按住说话时
+                //   队列照样加入会话被喂 TTS，松手即发出所选音色。
+                MVLog(@"[direct] QQ 自动触发未生效 —— 保留装填，等待手动按住");
+                fin(NO, @"自动触发未生效：请手动按住「按住 说话」，松开即发出（2 分钟内有效）");
+            } else {
+                MVLog(@"[direct] ❌ 1.2s 内录音未被接管，取消直发（不会残留录音）");
+                [MyVoiceRecorder cancelFeed];
+                [MyVoiceDirectSend cancelWith:stopTarget sender:stopIsSender fallbackRC:rc];
+                fin(NO, @"微信内部录音未按预期启动（版本接口可能不同）");
+            }
             return;
         }
         // ★ 2.6.0：最短按住 1.3s（QQ 对 <1s 语音按太短丢弃）；TTS 喂完后自动补静音
