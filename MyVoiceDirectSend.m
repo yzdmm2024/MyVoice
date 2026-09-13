@@ -6,6 +6,9 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
+// Substrate / ellekit 均提供（同 MSHookFunction）
+extern void MSHookMessageEx(Class _class, SEL message, IMP hook, IMP *old);
+
 // 私有声明：保证「后面定义、前面调用」不会触发
 // "no known class method for selector"（这个在 ObjC 里是**错误**，不是警告）。
 @interface MyVoiceDirectSend ()
@@ -232,12 +235,49 @@ static id gAS = nil;      // AudioSender
 #pragma mark - 可用性 / 诊断
 
 + (BOOL)qqAvailable {
-    // ★ 2.5.1：QQ 直发——QQChatVoicePttRecorderManager 可独立实例化，
-    //   frida 实测：alloc.init → startRecord（立即创建 AudioQueue，劫持点）→
-    //   stopRecord:YES（BOOL 语义按发送处理）。status: 0=空闲 2=录音中。
+    // ★ 2.5.1/2.5.2：QQ 直发——复用聊天页自己的 QQChatVoicePttRecorderManager 实例。
+    //   frida 实测：自己 alloc.init 的裸实例没有 delegate，startRecord/stopRecord:YES
+    //   走完了录音但 QQ 不发送；只有聊天输入栏创建、delegate 已接线的实例才真正发送。
+    //   实例「按住才创建、松手即销毁」→ hook +alloc 扣住最新实例（强引用），
+    //   天然跟随用户最后按住的聊天。
     NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
-    return ([bid rangeOfString:@"tencent.mqq"].location != NSNotFound &&
-            NSClassFromString(@"QQChatVoicePttRecorderManager") != nil);
+    BOOL isQQ = ([bid rangeOfString:@"tencent.mqq"].location != NSNotFound &&
+                 NSClassFromString(@"QQChatVoicePttRecorderManager") != nil);
+    if (isQQ) [self installQQMgrHook];
+    return isQQ;
+}
+
+// ---- QQ 管理器扣留（hook 类方法 +alloc，注意挂 metaclass）----
+static id  g_mvQQMgr        = nil;   // 最近一次创建的实例（强引用）
+static IMP g_mvOrigQQAlloc  = NULL;
+
+static id MVQQAllocHook(id self, SEL _cmd) {
+    id obj = ((id(*)(id, SEL))g_mvOrigQQAlloc)(self, _cmd);
+    if (obj) {
+        @synchronized([MyVoiceDirectSend class]) {
+            if (g_mvQQMgr != obj) {
+                g_mvQQMgr = obj;   // 强引用：ARC 存入 __strong 等价的 static（手动持有）
+                CFRetain((__bridge CFTypeRef)obj);
+                MVLog(@"[direct] 已扣留新的 PttRecorderManager %p（当前聊天已激活）", obj);
+            }
+        }
+    }
+    return obj;
+}
+
++ (void)installQQMgrHook {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class cls = NSClassFromString(@"QQChatVoicePttRecorderManager");
+        if (!cls) return;
+        Class meta = object_getClass(cls);   // 类方法挂在 metaclass 上
+        MSHookMessageEx(meta, @selector(alloc), (IMP)MVQQAllocHook, &g_mvOrigQQAlloc);
+        MVLog(@"[direct] QQ PttRecorderManager alloc hook 已安装");
+    });
+}
+
++ (id)stashedQQMgr {
+    @synchronized([MyVoiceDirectSend class]) { return g_mvQQMgr; }
 }
 
 + (BOOL)available {
@@ -307,11 +347,18 @@ static id gAS = nil;      // AudioSender
     id target = nil; NSString *startSel = nil; id stopTarget = nil; BOOL stopIsSender = NO;
 
     if (qqMode) {
-        Class MC = NSClassFromString(@"QQChatVoicePttRecorderManager");
-        target = [[MC alloc] init];
+        // ★ 2.5.2：必须用聊天页自己的实例（有 delegate 才会发送）。
+        //   自己 alloc 的裸实例录音正常但 QQ 不发（真机实测）。
+        target = [MyVoiceDirectSend stashedQQMgr];
+        if (!target) {
+            MVLog(@"[direct] ❌ QQ：尚无激活的 PttRecorderManager（本聊天还没按过说话键）");
+            [MyVoiceRecorder cancelFeed];
+            fin(NO, @"请先在本聊天按住一次说话键（可取消），激活后再次发送");
+            return;
+        }
         stopTarget = target;
         startSel = @"startRecord";
-        MVLog(@"[direct] QQ 模式：新建 PttRecorderManager %p", target);
+        MVLog(@"[direct] QQ 模式：复用聊天页 PttRecorderManager %p", target);
     }
 
     if (qqMode) {
@@ -347,6 +394,23 @@ static id gAS = nil;      // AudioSender
 
     MVInvoke(target, startSel, @[me, talker ?: @"", [NSNull null]]);
 
+    __block BOOL qqFailed = NO;
+    if (qqMode) {
+        // ★ QQ：0.5s 后查 isStartSuccess —— 聊天已切换/实例失效时启动会失败，
+        //   立即取消装填与录音并明确提示（否则用户以为发成功了）。
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            BOOL ok = NO;
+            @try { ok = [(id)target isStartSuccess]; } @catch (NSException *e) {}
+            if (!ok) {
+                qqFailed = YES;
+                MVLog(@"[direct] ❌ QQ isStartSuccess=NO（聊天可能已切换，需重新按住激活）");
+                [MyVoiceRecorder cancelFeed];
+                [MyVoiceDirectSend cancelWith:stopTarget sender:stopIsSender fallbackRC:rc];
+                fin(NO, @"录音启动失败：请在本聊天按住一次说话键（可取消）后重试");
+            }
+        });
+    }
     // ---- 轮询：等「TTS 真正喂完」（fedDone）再松手 ----
     // 参考实现（TTSFloat v29）铁证：按【预估时长】定时 Stop 会截断数据 →
     // 微信一直在等完整音频 → 转圈/半截语音/好久不出来。
@@ -355,6 +419,7 @@ static id gAS = nil;      // AudioSender
     NSInteger capMs = (NSInteger)(MAX(8.0, est * 3.0 + 3.0) * 1000.0);   // 硬上限，防卡死
     __block NSInteger waited = 0;
     [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES block:^(NSTimer *t){
+        if (qqFailed) { [t invalidate]; return; }   // QQ 启动失败已另行收尾
         waited += 100;
         BOOL started = ([MyVoiceRecorder fedBytes] > 0);
         BOOL done    = [MyVoiceRecorder fedDone];
