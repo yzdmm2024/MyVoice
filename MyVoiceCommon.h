@@ -346,6 +346,29 @@ static inline NSString* MVCurrentModel(void)   { return MVCurrentVoice()[@"model
 // 注意：target_model 必须与后续合成用的模型一致，否则合成会失败 —— 所以存音色时要记下这个值。
 static inline NSString* MVDesignModel(void) { return @"cosyvoice-v3.5-plus"; }
 
+// ★ 2.8.4：复刻（克隆）统一使用的 target_model。
+//   旧实现用 MVCurrentModel() —— 那是「当前选中音色」的 model，可能指向别的音色/别的版本，
+//   新复刻出来的 voice_id 会绑到一个意外的模型上，合成时 model 对不上 → 报错或退回旧音色。
+static inline NSString* MVCosyModel(void) {
+    NSString *v = MVGetStr(@"cosyModel");
+    return v.length ? v : @"cosyvoice-v3.5-plus";
+}
+
+// ★ 2.8.4：按 voiceID 反查该音色绑定的 model。
+//   CosyVoice 的 voice_id 与复刻时的 target_model 强绑定，合成必须用同一个 model，否则会失败。
+//   取不到就退回统一的复刻模型（MVCosyModel）。
+static inline NSString* MVModelForVoice(NSString *voiceID) {
+    if (voiceID.length) {
+        for (NSDictionary *d in MVVoices()) {
+            if ([d[@"voiceID"] isEqualToString:voiceID]) {
+                NSString *m = d[@"model"];
+                if ([m isKindOfClass:[NSString class]] && m.length) return m;
+            }
+        }
+    }
+    return MVCosyModel();
+}
+
 // OSS（克隆音色时一次性托管参考音频，拿公网 URL 给 DashScope）
 static inline NSString* MVOSSBucket(void)   { return MVGetStr(@"ossBucket"); }
 static inline NSString* MVOSSHost(void)     { return MVGetStr(@"ossHost"); }   // 形如 oss-cn-hangzhou.aliyuncs.com

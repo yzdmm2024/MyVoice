@@ -169,7 +169,9 @@
     self.statusLabel.text = design
         ? @"填一句音色描述，点「生成音色」。约 10~30 秒。\n不需要录音，也不需要 OSS。"
         : (upload
-           ? @"选一段安静、清晰、15~30 秒的目标声音音频\n（比如对方的语音备忘录），点「开始克隆」。"
+           ? @"选一段安静、清晰、10~60 秒的目标声音音频（支持 wav/mp3/m4a）。\n"
+             @"整段是同一个人连续说话时相似度最高；\n"
+             @"若是把多段短句拼起来的文件也能复刻，但相似度会打折。点「开始克隆」。"
            : @"点「开始录音」，读 15~30 秒安静干声，松手自动复刻。\n只需 API Key，无需配置 OSS。");
 }
 
@@ -217,7 +219,7 @@
     self.uploadBtn.enabled = NO;
     self.statusLabel.text = @"正在上传托管并复刻，约 10~30 秒…";
     __weak typeof(self) ws = self;
-    NSString *model = MVCurrentModel();
+    NSString *model = MVCosyModel();
     [[MyVoiceCloud shared] cloneVoiceWithName:name referenceAudioPath:self.uploadPath
         completion:^(NSString *voiceID, NSError *err){
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -230,7 +232,7 @@
                 }
                 [self saveVoice:name voiceID:voiceID model:model];
                 self.statusLabel.text = [NSString stringWithFormat:
-                    @"✅ 克隆成功：%@\nvoice_id=%@\n\n到音色列表选它即可（我的克隆段）。", name, voiceID];
+                    @"✅ 克隆成功：%@\nvoice_id=%@\n\n已自动切换到该音色，回面板直接发就是它了。", name, voiceID];
             });
         }];
 }
@@ -286,13 +288,14 @@
     if (!ok) { self.statusLabel.text = @"录音失败"; return; }
     self.statusLabel.text = @"录音完成，正在上传托管并复刻…";
     NSString *name = self.nameField.text.length ? self.nameField.text : @"我的声音";
-    NSString *model = MVCurrentModel();
+    NSString *model = MVCosyModel();
     [[MyVoiceCloud shared] cloneVoiceWithName:name referenceAudioPath:self.recPath
         completion:^(NSString *voiceID, NSError *err){
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (!voiceID) { self.statusLabel.text = [@"克隆失败：" stringByAppendingString:err.localizedDescription]; return; }
                 [self saveVoice:name voiceID:voiceID model:model];
-                self.statusLabel.text = [NSString stringWithFormat:@"✅ 克隆成功：%@\nvoice_id=%@", name, voiceID];
+                self.statusLabel.text = [NSString stringWithFormat:
+                    @"✅ 克隆成功：%@\nvoice_id=%@\n\n已自动切换到该音色，回面板直接发就是它了。", name, voiceID];
             });
         }];
 }
@@ -319,18 +322,43 @@
                     return;
                 }
                 [self saveVoice:name voiceID:voiceID model:MVDesignModel()];
-                self.statusLabel.text = [NSString stringWithFormat:@"✅ 生成成功：%@\nvoice_id=%@\n\n回悬浮球面板选它即可。", name, voiceID];
+                self.statusLabel.text = [NSString stringWithFormat:
+                    @"✅ 生成成功：%@\nvoice_id=%@\n\n已自动切换到该音色，回面板直接发就是它了。", name, voiceID];
             });
         }];
 }
 
 - (void)saveVoice:(NSString*)name voiceID:(NSString*)voiceID model:(NSString*)model {
+    if (!voiceID.length) return;
+    if (!model.length) model = MVCosyModel();
+
+    // ★ 2.8.4 修掉「克隆没效果」的真 bug：
+    //   ① 旧实现只写 currentVoiceID、**不写 ttsProvider**。而 ttsProvider 默认 = 1（千问），
+    //      MyVoiceSender 里 `vid = (MVTTSProvider()==1) ? MVQwenVoice() : MVCurrentVoiceID();`
+    //      —— provider 还是 1 时，永远用千问预置音色，克隆出来的 voice_id 完全不参与合成。
+    //      这就是"克隆完了发出去还是原来那个声音（普通话）"的直接原因。
+    //      修法：复刻/设计成功后【自动切到 CosyVoice + 选中新音色】，克隆立刻生效，不用手动再点一次。
+    //   ② 音色 item 里的 model 必须等于复刻时的 target_model（MVCosyModel），否则合成会失败。
+    //   ③ 同名音色不再无限堆叠，按 name 覆盖更新，列表保持干净。
     NSMutableArray *vs = [NSMutableArray arrayWithArray:MVVoices()];
-    [vs addObject:@{@"name": name, @"voiceID": voiceID, @"model": model}];
-    [MVPrefs() setObject:vs forKey:@"voices"];
-    [MVPrefs() setObject:voiceID forKey:@"currentVoiceID"];
-    [MVPrefs() synchronize];
-    MVLog(@"[clone] 已保存音色 %@ -> %@ (%@)", name, voiceID, model);
+    NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+    entry[@"name"]    = name.length ? name : @"克隆音色";
+    entry[@"voiceID"] = voiceID;
+    entry[@"model"]   = model;
+    NSInteger same = -1;
+    for (NSUInteger i = 0; i < vs.count; i++) {
+        NSDictionary *x = vs[i];
+        if ([x isKindOfClass:[NSDictionary class]] && [x[@"name"] isEqual:entry[@"name"]]) {
+            same = (NSInteger)i; break;
+        }
+    }
+    if (same >= 0) vs[(NSUInteger)same] = entry; else [vs addObject:entry];
+
+    MVSetShared(@"voices", vs);
+    MVSetShared(@"currentVoiceID", voiceID);
+    MVSetShared(@"ttsProvider", @0);    // ★ 关键：切到 CosyVoice，克隆才会被用上
+    MVSetShared(@"cosyModel", model);   // 复刻 / 合成统一用这个模型
+    MVLog(@"[clone] 已保存音色 %@ -> %@ (%@)，并自动切换 ttsProvider=0", entry[@"name"], voiceID, model);
 }
 
 - (void)dismiss { [self dismissViewControllerAnimated:YES completion:nil]; }

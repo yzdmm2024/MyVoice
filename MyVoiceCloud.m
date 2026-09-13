@@ -304,7 +304,9 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
 - (void)synthesizeCosyText:(NSString*)text voiceID:(NSString*)voiceID completion:(void(^)(NSData*,NSError*))completion {
     NSString *apiKey = MVAPIKey();
     NSString *host = [self maasHost];
-    NSString *model = MVCurrentModel();
+    // ★ 2.8.4：合成模型必须与「这个 voiceID 复刻时绑定的 target_model」一致，
+    //   不能拿"当前选中音色"的 model 去套（两者可能不是同一个音色）→ 按 voiceID 反查。
+    NSString *model = MVModelForVoice(voiceID);
     if (!apiKey.length) { completion(nil, MVErr(@"未配置 DashScope API Key（设置→我的语音）")); return; }
     if (!voiceID.length){ completion(nil, MVErr(@"未选择音色：请先在设置里克隆/选择一个音色")); return; }
     if (!text.length)  { completion(nil, MVErr(@"文字为空")); return; }
@@ -588,7 +590,7 @@ static inline uint32_t MVrd32(const uint8_t *p) {
         @"model": @"voice-enrollment",
         @"input": @{
             @"action": @"create_voice",
-            @"target_model": MVCurrentModel(),
+            @"target_model": MVCosyModel(),
             @"prefix": @"myvoice",
             @"url": audioURL
         }
