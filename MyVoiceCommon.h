@@ -308,10 +308,8 @@ static inline double MVCosyStyleRate(NSInteger idx) {
         default: return 0.0;
     }
 }
-// instruction：自定义指令优先，其次按一键风格取预设；返回 nil 表示不传
-static inline NSString* MVCosyInstruction(void) {
-    NSString *custom = MVGetStr(@"cosyInstruction");
-    if (custom.length) return custom;
+// 一键风格 → 语气句（拆出来，便于和方言叠加）
+static inline NSString* MVCosyStyleInstruction(void) {
     switch (MVCosyStyle()) {
         case 1: return @"用自然随意的日常聊天语气说，像跟朋友发语音一样，语速自然，不要播音腔";
         case 2: return @"用标准播报腔，字正腔圆，语气平稳，吐字清晰";
@@ -320,6 +318,30 @@ static inline NSString* MVCosyInstruction(void) {
         case 5: return @"语气活泼俏皮，带一点笑意，节奏轻快";
         default: return nil;
     }
+}
+// ★ 2.8.6：instruction 改成「方言句 + 语气句」两段拼接。
+//   官方只有一个 instruction 字段，但方言和语气是两个维度，不该互相顶掉：
+//   旧实现里点一次「风格」就会清掉 cosyInstruction —— 而方言写的正是这个字段，
+//   于是面板还显示着"方言：湖南话"，实际指令已经空了（静默失效，最难查的一类坑）。
+//   规则：方言（独立维度，不被风格清掉）+（自定义指令优先于一键风格）；总长按官方上限截到 100 字符。
+//   注：这里内联生成方言句，避免依赖定义在后面的 MVDialectInstruction（C 需先声明后用）。
+static inline NSString* MVCosyInstruction(void) {
+    NSMutableArray *parts = [NSMutableArray array];
+    NSString *dname = MVGetStr(@"cosyDialect");
+    if (dname.length && ![dname isEqualToString:@"普通话"]) {
+        [parts addObject:[NSString stringWithFormat:@"请用%@说这句话。", dname]];
+    }
+    NSString *custom = MVGetStr(@"cosyInstruction");
+    if (custom.length) {
+        [parts addObject:custom];
+    } else {
+        NSString *st = MVCosyStyleInstruction();
+        if (st.length) [parts addObject:st];
+    }
+    if (!parts.count) return nil;
+    NSString *out = [parts componentsJoinedByString:@""];
+    if (out.length > 100) out = [out substringToIndex:100];   // 官方上限 100 字符
+    return out;
 }
 // 语速 0.5~2.0：没单独设过就回落到千问语速，老用户行为不变
 static inline double MVCosyRate(void) {

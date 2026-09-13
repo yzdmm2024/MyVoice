@@ -477,10 +477,13 @@
         NSString *title = [d isEqualToString:cur] ? [@"✓ " stringByAppendingString:d] : d;
         [ac addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault
             handler:^(UIAlertAction *a){
+                // ★ 2.8.6：方言是独立维度，只写 cosyDialect ——
+                //   语气（自定义指令 / 一键风格）由 MVCosyInstruction 自动拼在后半句，
+                //   所以这里绝不能去覆盖 cosyInstruction（旧写法会把用户写的语气顶掉）。
                 MVSetShared(@"cosyDialect", d);
-                // 「普通话」= 清掉方言指令，回到模型默认读数
-                MVSetShared(@"cosyInstruction", MVDialectInstruction(d) ?: @"");
                 [self updateDialectButtons];
+                [MyVoiceCloud clearSynthesisCache];   // 换了指令必须清缓存，否则命中旧音频
+                [self prewarmNow];
                 [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"已设为%@", d]];
             }]];
     }
@@ -508,7 +511,10 @@
         handler:^(UIAlertAction *a){
             MVSetShared(@"cosyInstruction", @"");
             MVSetShared(@"cosyDialect", @"");
+            [self updateStyleButtons];
             [self updateDialectButtons];
+            [MyVoiceCloud clearSynthesisCache];
+            [self prewarmNow];
             [[MyVoiceManager shared] toast:@"已清空指令"];
         }]];
     [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
@@ -518,8 +524,13 @@
                 stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
             if (t.length > 100) t = [t substringToIndex:100];   // 官方 instruction 上限 100 字符
             MVSetShared(@"cosyInstruction", t ?: @"");
-            MVSetShared(@"cosyDialect", @"");                   // 自定义优先，清掉方言高亮
+            // ★ 2.8.6：自定义指令属于"语气"维度 —— 它会取代一键风格（互斥），
+            //   但**不动 cosyDialect**：方言和语气是两码事，可以同时生效（拼接成一句）。
+            MVSetShared(@"cosyStyle", @0);
+            [self updateStyleButtons];
             [self updateDialectButtons];
+            [MyVoiceCloud clearSynthesisCache];
+            [self prewarmNow];
             [[MyVoiceManager shared] toast:t.length ? @"已保存指令" : @"已清空指令"];
         }]];
     UIViewController *top = [MyVoiceResolver anyWindow].rootViewController;
@@ -768,7 +779,8 @@
 - (void)onStyleTap:(UIButton*)b {
     NSInteger idx = b.tag - 2000;
     MVSetShared(@"cosyStyle", @(idx));
-    MVSetShared(@"cosyInstruction", @"");          // 选预设时清掉自定义指令，避免互相覆盖
+    // 选预设清掉自定义指令（同属"语气"维度，互斥）；注意别碰 cosyDialect —— 方言独立
+    MVSetShared(@"cosyInstruction", @"");
     // 一键 = 一步到位：连该风格推荐的语速一起调过去（否则"慢语速"只靠指令，听不出明显差别）
     double rec = MVCosyStyleRate(idx);
     if (rec > 0.01) {
