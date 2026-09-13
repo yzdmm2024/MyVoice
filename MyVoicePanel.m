@@ -43,6 +43,9 @@
 @property (nonatomic, strong) NSArray *allVoices;
 @property (nonatomic, strong) NSArray *filteredVoices;
 @property (nonatomic, strong) NSString *selectedVoiceID;
+@property (nonatomic, strong) UIButton *dialectBtn;
+@property (nonatomic, strong) UIButton *instrBtn;
+@property (nonatomic, strong) NSArray *voiceSections;
 @property (nonatomic, strong) NSTimer *sessionTimer;
 @end
 
@@ -379,12 +382,20 @@
 - (void)refreshVoiceState {
     self.allVoices = [self voiceList];
     self.filteredVoices = self.allVoices;
+    [self rebuildVoiceSections];                    // ★ 2.8.6：分节
     NSUInteger nQwen = 0, nMine = 0;
     for (NSDictionary *d in self.allVoices)
         ([d[@"provider"] integerValue] == 1) ? nQwen++ : nMine++;
     if (self.sectionLabel) {
-        self.sectionLabel.text = [NSString stringWithFormat:
-            @"千问 %lu 个 · 我的 %lu 个", (unsigned long)nQwen, (unsigned long)nMine];
+        // ★ 2.8.6：状态行顺带告诉你"当前音色还能说几种方言"——
+        //   方言能力由音色绑定的模型决定，这是最容易踩空的地方。
+        NSArray *dl = (MVTTSProvider() == 0)
+            ? MVDialectListForModel(MVModelForVoice(MVCurrentVoiceID())) : @[];
+        self.sectionLabel.text = dl.count
+            ? [NSString stringWithFormat:@"千问 %lu · 我的 %lu · 当前音色可 %lu 种方言",
+               (unsigned long)nQwen, (unsigned long)nMine, (unsigned long)dl.count]
+            : [NSString stringWithFormat:@"千问 %lu 个 · 我的 %lu 个",
+               (unsigned long)nQwen, (unsigned long)nMine];
     }
     NSString *vid = (MVTTSProvider() == 1) ? MVQwenVoice() : MVCurrentVoiceID();
     self.selectedVoiceID = vid;
@@ -409,7 +420,111 @@
     if (self.pitchValueLabel) [self updatePitchLabel];
     if (self.emotionSeg)      self.emotionSeg.selectedSegmentIndex = [self emotionIndex:MVQwenEmotion()];
     [self updateStyleButtons];
+    [self updateDialectButtons];                    // ★ 2.8.6
     [self layoutPickerRows];
+}
+
+#pragma mark - ★ 2.8.6 方言 / 自定义指令 / 分节
+
+// 音色列表分节：千问预置一大坨 + 我的克隆搅在一起，36 个平铺根本找不到自己的音色
+- (void)rebuildVoiceSections {
+    NSMutableArray *qwen = [NSMutableArray array], *mine = [NSMutableArray array];
+    for (NSDictionary *d in self.filteredVoices) {
+        ([d[@"provider"] integerValue] == 1) ? [qwen addObject:d] : [mine addObject:d];
+    }
+    NSMutableArray *secs = [NSMutableArray array];
+    if (qwen.count) [secs addObject:@{@"title": [NSString stringWithFormat:@"千问预置 · %lu", (unsigned long)qwen.count],
+                                      @"items": qwen}];
+    if (mine.count) [secs addObject:@{@"title": [NSString stringWithFormat:@"我的克隆 · %lu", (unsigned long)mine.count],
+                                      @"items": mine}];
+    self.voiceSections = secs;
+}
+
+- (NSDictionary*)voiceAt:(NSIndexPath*)ip {
+    if (ip.section < 0 || ip.section >= (NSInteger)self.voiceSections.count) return nil;
+    NSArray *items = self.voiceSections[(NSUInteger)ip.section][@"items"];
+    if (ip.row < 0 || ip.row >= (NSInteger)items.count) return nil;
+    return items[(NSUInteger)ip.row];
+}
+
+- (void)updateDialectButtons {
+    if (!self.dialectBtn) return;
+    NSString *d = MVGetStr(@"cosyDialect");
+    [self.dialectBtn setTitle:(d.length ? [NSString stringWithFormat:@"方言：%@", d] : @"方言")
+                     forState:UIControlStateNormal];
+    NSString *inst = MVGetStr(@"cosyInstruction");
+    BOOL custom = (inst.length > 0) && (d.length == 0);
+    [self.instrBtn setTitle:(custom ? @"指令：已自定义" : @"自定义指令")
+                   forState:UIControlStateNormal];
+}
+
+// 方言：只有「当前音色绑定的模型」支持的那些才列出来
+- (void)onDialectTap {
+    NSString *model = MVModelForVoice(MVCurrentVoiceID());
+    NSArray *ds = MVDialectListForModel(model);
+    if (!ds.count) {
+        [[MyVoiceManager shared] toast:@"该音色的模型不支持方言（复刻时选 v3/Qwen 模型即可）"];
+        return;
+    }
+    BOOL isQwen = [model hasPrefix:@"qwen-audio-3.0-tts"];
+    NSString *msg = [NSString stringWithFormat:
+        @"%@ 支持以下方言。\n方言靠合成指令实现，不需要重新克隆。%@",
+        model, isQwen ? @"（含湖南话、重庆话）" : @""];
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"选方言"
+        message:msg preferredStyle:UIAlertControllerStyleActionSheet];
+    NSString *cur = MVGetStr(@"cosyDialect");
+    for (NSString *d in ds) {
+        NSString *title = [d isEqualToString:cur] ? [@"✓ " stringByAppendingString:d] : d;
+        [ac addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault
+            handler:^(UIAlertAction *a){
+                MVSetShared(@"cosyDialect", d);
+                // 「普通话」= 清掉方言指令，回到模型默认读数
+                MVSetShared(@"cosyInstruction", MVDialectInstruction(d) ?: @"");
+                [self updateDialectButtons];
+                [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"已设为%@", d]];
+            }]];
+    }
+    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    ac.popoverPresentationController.sourceView = self.dialectBtn;
+    ac.popoverPresentationController.sourceRect = self.dialectBtn.bounds;
+    UIViewController *top = [MyVoiceResolver anyWindow].rootViewController;
+    while (top.presentedViewController) top = top.presentedViewController;
+    [top presentViewController:ac animated:YES completion:nil];
+}
+
+// 自定义指令：改的是语气/情绪/语速/角色，不是口音（口音请用左边的方言）
+- (void)onInstructionTap {
+    NSString *cur = MVGetStr(@"cosyInstruction");
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"自定义指令"
+        message:@"用一句自然语言描述"怎么念"，最多 100 字符。\n"
+                 "例：用慵懒随意的语气说，语速慢一点，句尾别拖长。\n"
+                 "注意：这改的是语气/情绪/语速，改不了口音 —— 方言请用左边的「方言」。"
+        preferredStyle:UIAlertControllerStyleAlert];
+    [ac addTextFieldWithConfigurationHandler:^(UITextField *tf){
+        tf.text = cur;
+        tf.placeholder = @"语气 / 情绪 / 语速 / 角色";
+    }];
+    [ac addAction:[UIAlertAction actionWithTitle:@"清空" style:UIAlertActionStyleDestructive
+        handler:^(UIAlertAction *a){
+            MVSetShared(@"cosyInstruction", @"");
+            MVSetShared(@"cosyDialect", @"");
+            [self updateDialectButtons];
+            [[MyVoiceManager shared] toast:@"已清空指令"];
+        }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault
+        handler:^(UIAlertAction *a){
+            NSString *t = [ac.textFields.firstObject.text
+                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (t.length > 100) t = [t substringToIndex:100];   // 官方 instruction 上限 100 字符
+            MVSetShared(@"cosyInstruction", t ?: @"");
+            MVSetShared(@"cosyDialect", @"");                   // 自定义优先，清掉方言高亮
+            [self updateDialectButtons];
+            [[MyVoiceManager shared] toast:t.length ? @"已保存指令" : @"已清空指令"];
+        }]];
+    UIViewController *top = [MyVoiceResolver anyWindow].rootViewController;
+    while (top.presentedViewController) top = top.presentedViewController;
+    [top presentViewController:ac animated:YES completion:nil];
 }
 
 #pragma mark - 音色选择视图
@@ -531,6 +646,29 @@
     [self updatePitchLabel];
     [self.pickerView addSubview:self.pitchValueLabel];
 
+    // ★ 2.8.6：方言 / 自定义指令（只对克隆音色有意义）
+    //   声音复刻只学「声线」不学口音 —— 想让克隆音色说方言，只能靠合成时的 instruction。
+    //   所以这里把"方言"做成一次点击（写一句「请用X话说这句话。」），而不是让用户自己憋 prompt。
+    self.dialectBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    self.dialectBtn.titleLabel.font = [UIFont systemFontOfSize:12];
+    [self.dialectBtn setTitleColor:[UIColor colorWithWhite:0 alpha:0.8] forState:UIControlStateNormal];
+    self.dialectBtn.layer.cornerRadius = 12;
+    self.dialectBtn.layer.borderWidth = 0.5;
+    self.dialectBtn.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.15].CGColor;
+    self.dialectBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.05];
+    [self.dialectBtn addTarget:self action:@selector(onDialectTap) forControlEvents:UIControlEventTouchUpInside];
+    [self.pickerView addSubview:self.dialectBtn];
+
+    self.instrBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    self.instrBtn.titleLabel.font = [UIFont systemFontOfSize:12];
+    [self.instrBtn setTitleColor:[UIColor colorWithWhite:0 alpha:0.8] forState:UIControlStateNormal];
+    self.instrBtn.layer.cornerRadius = 12;
+    self.instrBtn.layer.borderWidth = 0.5;
+    self.instrBtn.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.15].CGColor;
+    self.instrBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.05];
+    [self.instrBtn addTarget:self action:@selector(onInstructionTap) forControlEvents:UIControlEventTouchUpInside];
+    [self.pickerView addSubview:self.instrBtn];
+
     self.sectionLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, y, W - 28, 14)];
     NSUInteger nQwen = 0, nMine = 0;
     for (NSDictionary *d in self.allVoices)
@@ -591,6 +729,17 @@
         self.pitchValueLabel.frame = CGRectMake(W - 66, y, 52, 18);
         y += 20;
     }
+
+    // ★ 2.8.6：方言 / 自定义指令行（仅克隆音色；千问不认 instruction）
+    self.dialectBtn.hidden = !cosy;
+    self.instrBtn.hidden   = !cosy;
+    if (cosy) {
+        CGFloat half = (W - 30) / 2;
+        self.dialectBtn.frame = CGRectMake(12, y, half, 26);
+        self.instrBtn.frame   = CGRectMake(12 + half + 6, y, half, 26);
+        y += 30;
+    }
+    [self updateDialectButtons];
 
     self.sectionLabel.frame = CGRectMake(14, y, W - 28, 14);
     y += 16;
@@ -683,13 +832,22 @@
         }
         self.filteredVoices = arr;
     }
+    [self rebuildVoiceSections];                    // ★ 2.8.6
     [self.voiceTable reloadData];
 }
 - (void)searchBarSearchButtonClicked:(UISearchBar*)searchBar { [searchBar resignFirstResponder]; }
 
 #pragma mark - UITableView
+- (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView {
+    return (NSInteger)self.voiceSections.count;     // ★ 2.8.6：千问 / 克隆 分节
+}
+- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section {
+    if (section < 0 || section >= (NSInteger)self.voiceSections.count) return nil;
+    return self.voiceSections[(NSUInteger)section][@"title"];
+}
 - (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section {
-    return (NSInteger)self.filteredVoices.count;
+    if (section < 0 || section >= (NSInteger)self.voiceSections.count) return 0;
+    return (NSInteger)[self.voiceSections[(NSUInteger)section][@"items"] count];
 }
 - (UITableViewCell*)tableView:(UITableView*)tableView cellForRowAtIndexPath:(NSIndexPath*)indexPath {
     static NSString *cid = @"mvVoiceCell";
@@ -702,7 +860,8 @@
         cell.detailTextLabel.font = [UIFont systemFontOfSize:10];
         cell.detailTextLabel.textColor = [UIColor colorWithWhite:0 alpha:0.25];
     }
-    NSDictionary *d = self.filteredVoices[(NSUInteger)indexPath.row];
+    NSDictionary *d = [self voiceAt:indexPath];
+    if (!d) return [[UITableViewCell alloc] init];
     cell.textLabel.text = d[@"name"] ?: d[@"voiceID"];
     cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ · %@",
         ([d[@"provider"] integerValue] == 1) ? @"千问" : @"克隆", d[@"model"] ?: @""];
@@ -712,7 +871,8 @@
 }
 - (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    NSDictionary *d = self.filteredVoices[(NSUInteger)indexPath.row];
+    NSDictionary *d = [self voiceAt:indexPath];
+    if (!d) return;
     self.selectedVoiceID = d[@"voiceID"];
     if ([d[@"provider"] integerValue] == 1) {
         MVSetShared(@"ttsProvider", @1);
@@ -729,8 +889,9 @@
     if (g.state != UIGestureRecognizerStateBegan) return;
     CGPoint p = [g locationInView:self.voiceTable];
     NSIndexPath *ip = [self.voiceTable indexPathForRowAtPoint:p];
-    if (!ip || ip.row >= (NSInteger)self.filteredVoices.count) return;
-    NSDictionary *d = self.filteredVoices[(NSUInteger)ip.row];
+    if (!ip) return;
+    NSDictionary *d = [self voiceAt:ip];
+    if (!d) return;
     if ([d[@"provider"] integerValue] == 1) { [[MyVoiceManager shared] toast:@"千问预置不可删"]; return; }
     NSString *vid = d[@"voiceID"] ?: @"";
     NSString *name = d[@"name"] ?: vid;

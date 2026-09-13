@@ -344,7 +344,84 @@ static inline BOOL MVCosySupportsInstruction(NSString *model) {
     if (!model.length) return NO;
     if ([model hasPrefix:@"cosyvoice-v3.5-"]) return YES;
     if ([model isEqualToString:@"cosyvoice-v3-flash"]) return YES;
+    // ★ 2.8.6：Qwen-Audio-TTS 的声音复刻音色支持任意指令（含方言）—— 别把它挡在外面，
+    //   它是唯二支持「湖南话」的复刻模型（CosyVoice 全系没有湖南话）。
+    if ([model hasPrefix:@"qwen-audio-3.0-tts"]) return YES;
     return NO;
+}
+
+// ===== ★ 2.8.6：复刻目标模型 + 方言（解锁「克隆音色说方言」）=====
+// 先说结论（很容易搞错）：声音复刻只学「声线」，不学口音。
+//   想让克隆音色说方言，必须靠【合成时的 instruction】指定 —— 参考音频是什么口音没用。
+//   而 voice_id 与复刻时的 target_model 强绑定，所以「复刻时选哪个模型」决定了后面能说什么方言：
+//     · cosyvoice-v3.5-plus / v3.5-flash / v3-flash 的复刻音色 → 支持任意指令，方言 17 种
+//     · qwen-audio-3.0-tts-plus / -flash         的复刻音色 → 方言 21 种，
+//       ★ 含「湖南话」「重庆话」等 CosyVoice 完全没有的方言
+//   （官方非实时 HTTP 的 model 取值范围里，这两族是并列的；voice-enrollment 的
+//     target_model 同样接受 qwen-audio-3.0-tts-*，language_hints / max_prompt_audio_length /
+//     enable_preprocess 也只对这几款生效。）
+static inline NSArray* MVCosyModelList(void) {
+    return @[@"cosyvoice-v3.5-plus", @"cosyvoice-v3-flash",
+             @"qwen-audio-3.0-tts-flash", @"qwen-audio-3.0-tts-plus"];
+}
+static inline NSArray* MVCosyModelLabels(void) {
+    return @[@"v3.5+ 音质", @"v3 方言少", @"Qwen 方言全", @"Qwen+ 高质"];
+}
+static inline NSInteger MVCosyModelIndex(NSString *m) {
+    if (!m.length) return 0;
+    NSUInteger i = [MVCosyModelList() indexOfObject:m];
+    return (i == NSNotFound) ? 0 : (NSInteger)i;
+}
+// 这个模型能不能吃「方言」指令
+static inline BOOL MVCosyModelSupportsDialect(NSString *m) {
+    if (!m.length) return NO;
+    if ([m hasPrefix:@"qwen-audio-3.0-tts"]) return YES;
+    if ([m isEqualToString:@"cosyvoice-v3-flash"]) return YES;
+    if ([m hasPrefix:@"cosyvoice-v3.5-"]) return YES;
+    return NO;
+}
+// 各模型可用方言（点一下就写一句 instruction）
+static inline NSArray* MVDialectListForModel(NSString *m) {
+    static NSArray *cosy = nil, *qwen = nil;
+    if (!cosy) cosy = @[@"普通话", @"广东话", @"东北话", @"甘肃话", @"贵州话", @"河南话",
+                        @"湖北话", @"江西话", @"闽南话", @"宁夏话", @"山西话", @"陕西话",
+                        @"山东话", @"上海话", @"四川话", @"天津话", @"云南话"];
+    if (!qwen) qwen = @[@"普通话", @"广东话", @"重庆话", @"东北话", @"甘肃话", @"贵州话",
+                        @"浙江话", @"河北话", @"河南话", @"湖北话", @"湖南话", @"江西话",
+                        @"宁波话", @"宁夏话", @"青岛话", @"陕西话", @"山西话", @"山东话",
+                        @"上海话", @"四川话", @"云南话"];
+    if ([m hasPrefix:@"qwen-audio-3.0-tts"]) return qwen;
+    if (MVCosyModelSupportsDialect(m)) return cosy;
+    return @[];
+}
+// 方言 → instruction（「普通话」不传指令 = 恢复默认读数）
+static inline NSString* MVDialectInstruction(NSString *dialect) {
+    if (!dialect.length || [dialect isEqualToString:@"普通话"]) return nil;
+    return [NSString stringWithFormat:@"请用%@说这句话。", dialect];
+}
+
+// ===== ★ 2.8.6：复刻质量参数（官方 voice-enrollment 支持，旧版一个没传）=====
+// 只有 qwen-audio-3.0-tts-* / cosyvoice-v3.5-* / v3-flash 这几款支持，
+// 传给 v3-plus / v2 会 400，所以按模型判断后再带。
+static inline BOOL MVCloneSupportsQuality(NSString *m) {
+    if (!m.length) return NO;
+    if ([m hasPrefix:@"qwen-audio-3.0-tts"]) return YES;
+    if ([m hasPrefix:@"cosyvoice-v3.5-"]) return YES;
+    if ([m isEqualToString:@"cosyvoice-v3-flash"]) return YES;
+    return NO;
+}
+// 用多少秒音频做声纹：官方 [3.0, 30.0]，默认 10.0。
+// 本插件默认提到 20 秒 —— 连续语音越长，声纹越稳（前提是同一个人、无明显停顿）。
+static inline double MVCloneMaxLen(void) {
+    id v = MVGet(@"cloneMaxLen");
+    if (v) { double d = [v doubleValue]; if (d >= 3.0 && d <= 30.0) return d; }
+    return 20.0;
+}
+// 音频预处理（降噪 / 增强 / 音量规整）：官方默认关。
+// 安静干声建议关（最大化还原音色）；有底噪的素材打开更干净。
+static inline BOOL MVClonePreprocess(void) {
+    id v = MVGet(@"clonePreprocess");
+    return v ? [v boolValue] : NO;
 }
 
 // ===== ★ 2.8.5：文本「一键纠偏」（纯本地规则，零网络） =====
@@ -517,7 +594,7 @@ static inline NSArray* MVQwenVoiceList(void) {
         @{@"name": @"晓东(京腔男)",    @"voiceID": @"Dylan",    @"model": @"qwen3-tts-flash"},
         @{@"name": @"晴儿(川语女)",    @"voiceID": @"Sunny",    @"model": @"qwen3-tts-flash"},
         @{@"name": @"Jennifer(美语)",  @"voiceID": @"Jennifer", @"model": @"qwen3-tts-flash"},
-        @{@"name": @"Ryan(男声)",      @"voiceID": @"Ryan",     @"model": @"qwen3-tts-flash"},
+        @{@"name": @"Ryan(男声)",      @"voiceID": @"Ryan",     @"model": @"qwen3-tts-flash"},
     
         /* 方言音色 */
         @{@"name": @"粤语-阿强(男)",   @"voiceID": @"Rocky",    @"model": @"qwen3-tts-flash"},

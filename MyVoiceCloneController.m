@@ -25,6 +25,11 @@
 @property (nonatomic, strong) NSArray *recordViews;
 @property (nonatomic, strong) NSArray *designViews;
 @property (nonatomic, strong) NSArray *uploadViews;
+// ★ 2.8.6
+@property (nonatomic, strong) UISegmentedControl *modelSeg;
+@property (nonatomic, strong) UILabel *modelHint;
+@property (nonatomic, strong) UISwitch *preprocSwitch;
+@property (nonatomic, strong) UILabel *preprocLabel;
 @end
 
 @implementation MyVoiceCloneController
@@ -46,12 +51,43 @@
     [self.modeSeg addTarget:self action:@selector(updateMode) forControlEvents:UIControlEventValueChanged];
     [self.view addSubview:self.modeSeg];
 
+    // ---- ★ 2.8.6：复刻模型（决定这个音色以后能说哪些方言）----
+    //   voice_id 与复刻时的 target_model 强绑定，选错了要么方言说不了，要么合成直接失败。
+    UILabel *mLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 192, W-40, 16)];
+    mLabel.text = @"复刻模型（决定以后能说哪些方言）";
+    mLabel.font = [UIFont systemFontOfSize:12];
+    mLabel.textColor = [UIColor secondaryLabelColor];
+    [self.view addSubview:mLabel];
+
+    self.modelSeg = [[UISegmentedControl alloc] initWithItems:MVCosyModelLabels()];
+    self.modelSeg.frame = CGRectMake(20, 210, W-40, 30);
+    self.modelSeg.selectedSegmentIndex = MVCosyModelIndex(MVCosyModel());
+    [self.modelSeg addTarget:self action:@selector(onModelChanged:) forControlEvents:UIControlEventValueChanged];
+    [self.view addSubview:self.modelSeg];
+
+    self.modelHint = [[UILabel alloc] initWithFrame:CGRectMake(20, 244, W-40, 16)];
+    self.modelHint.font = [UIFont systemFontOfSize:11];
+    self.modelHint.textColor = [UIColor tertiaryLabelColor];
+    [self.view addSubview:self.modelHint];
+
+    self.preprocLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 264, W-160, 26)];
+    self.preprocLabel.text = @"音频降噪增强";
+    self.preprocLabel.font = [UIFont systemFontOfSize:13];
+    self.preprocLabel.textColor = [UIColor secondaryLabelColor];
+    [self.view addSubview:self.preprocLabel];
+
+    self.preprocSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(W-72, 262, 51, 31)];
+    self.preprocSwitch.on = MVClonePreprocess();
+    self.preprocSwitch.transform = CGAffineTransformMakeScale(0.8, 0.8);
+    [self.preprocSwitch addTarget:self action:@selector(onPreprocChanged:) forControlEvents:UIControlEventValueChanged];
+    [self.view addSubview:self.preprocSwitch];
+
     // ---- 模式 0：录音复刻 ----
     self.recBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.recBtn setTitle:@"开始录音（15~30秒安静干声）" forState:UIControlStateNormal];
     self.recBtn.backgroundColor = [UIColor systemBlueColor];
     [self.recBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    self.recBtn.frame = CGRectMake(20, 210, W-40, 48);
+    self.recBtn.frame = CGRectMake(20, 290, W-40, 48);
     self.recBtn.layer.cornerRadius = 10;
     [self.recBtn addTarget:self action:@selector(toggleRec) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.recBtn];
@@ -62,12 +98,12 @@
     [self.pickBtn setTitle:@"从文件选取音频（wav / mp3 / m4a…）" forState:UIControlStateNormal];
     self.pickBtn.backgroundColor = [UIColor systemBlueColor];
     [self.pickBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    self.pickBtn.frame = CGRectMake(20, 210, W-40, 48);
+    self.pickBtn.frame = CGRectMake(20, 290, W-40, 48);
     self.pickBtn.layer.cornerRadius = 10;
     [self.pickBtn addTarget:self action:@selector(pickAudio) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.pickBtn];
 
-    self.pickedLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 264, W-40, 18)];
+    self.pickedLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 344, W-40, 18)];
     self.pickedLabel.font = [UIFont systemFontOfSize:12];
     self.pickedLabel.textColor = [UIColor secondaryLabelColor];
     self.pickedLabel.text = @"尚未选择文件";
@@ -77,25 +113,25 @@
     [self.uploadBtn setTitle:@"开始克隆" forState:UIControlStateNormal];
     self.uploadBtn.backgroundColor = [UIColor systemBlueColor];
     [self.uploadBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    self.uploadBtn.frame = CGRectMake(20, 288, W-40, 48);
+    self.uploadBtn.frame = CGRectMake(20, 368, W-40, 48);
     self.uploadBtn.layer.cornerRadius = 10;
     [self.uploadBtn addTarget:self action:@selector(doUploadClone) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.uploadBtn];
     self.uploadViews = @[self.pickBtn, self.pickedLabel, self.uploadBtn];
 
     // ---- 模式 2：文字设计 ----
-    UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(20, 198, W-40, 18)];
+    UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(20, 278, W-40, 18)];
     tip.text = @"用一句话描述想要的声音"; tip.font = [UIFont systemFontOfSize:13];
     tip.textColor = [UIColor secondaryLabelColor];
     [self.view addSubview:tip];
 
-    self.promptView = [[UITextView alloc] initWithFrame:CGRectMake(20, 220, W-40, 90)];
+    self.promptView = [[UITextView alloc] initWithFrame:CGRectMake(20, 300, W-40, 90)];
     self.promptView.layer.cornerRadius = 8; self.promptView.font = [UIFont systemFontOfSize:15];
     self.promptView.backgroundColor = [UIColor systemBackgroundColor];
     self.promptView.text = @"沉稳的中年男性播音员，音色低沉浑厚，语速平稳，吐字清晰";
     [self.view addSubview:self.promptView];
 
-    self.previewField = [[UITextField alloc] initWithFrame:CGRectMake(20, 318, W-40, 40)];
+    self.previewField = [[UITextField alloc] initWithFrame:CGRectMake(20, 398, W-40, 40)];
     self.previewField.borderStyle = UITextBorderStyleRoundedRect;
     self.previewField.placeholder = @"试听文本（可留空）";
     [self.view addSubview:self.previewField];
@@ -104,7 +140,7 @@
     [self.designBtn setTitle:@"生成音色" forState:UIControlStateNormal];
     self.designBtn.backgroundColor = [UIColor systemBlueColor];
     [self.designBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    self.designBtn.frame = CGRectMake(20, 368, W-40, 48);
+    self.designBtn.frame = CGRectMake(20, 448, W-40, 48);
     self.designBtn.layer.cornerRadius = 10;
     [self.designBtn addTarget:self action:@selector(doDesign) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.designBtn];
@@ -159,13 +195,14 @@
     for (UIView *v in self.designViews) v.hidden = !design;
 
     CGRect f = self.statusLabel.frame;
-    f.origin.y = design ? 428 : (upload ? 344 : 272);
+    f.origin.y = design ? 508 : (upload ? 424 : 352);
     self.statusLabel.frame = f;
 
     if (!MVAPIKey().length) {
         self.statusLabel.text = @"⚠️ 请先在 设置→我的语音 填写 DashScope API Key";
         return;
     }
+    [self refreshModelHint];
     self.statusLabel.text = design
         ? @"填一句音色描述，点「生成音色」。约 10~30 秒。\n不需要录音，也不需要 OSS。"
         : (upload
@@ -203,10 +240,31 @@
     self.uploadName = src.lastPathComponent;
     // 显示文件名与时长（读不出时长就只显示文件名）
     AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:dst] options:nil];
+    // ★ 2.8.6：参考音频时长校验。官方 voice-enrollment 的 max_prompt_audio_length
+    //   取值范围是 [3.0, 30.0] 秒 —— 短于 3 秒提不出声纹，长于 30 秒只会被截一段用。
+    //   以前不校验，用户拿几秒的碎句去复刻，出来不像还以为是插件坏了。
     double dur = CMTimeGetSeconds(asset.duration);
-    if (dur > 0) self.pickedLabel.text = [NSString stringWithFormat:@"已选择：%@（%.1f 秒）", self.uploadName, dur];
-    else         self.pickedLabel.text = [NSString stringWithFormat:@"已选择：%@", self.uploadName];
-    self.statusLabel.text = @"";
+    if (dur <= 0 || dur != dur) {           // 读不出时长（无头 mp3 / 损坏容器）
+        self.pickedLabel.text = [NSString stringWithFormat:@"已选择：%@", self.uploadName];
+        self.statusLabel.text = @"⚠️ 读不出音频时长，无法校验。仍可试克隆，但建议换成 wav / m4a 再试。";
+        return;
+    }
+    self.pickedLabel.text = [NSString stringWithFormat:@"已选择：%@（%.1f 秒）", self.uploadName, dur];
+    if (dur < 3.0) {
+        self.uploadPath = nil;              // 直接拦下，别浪费一次复刻额度
+        self.statusLabel.text = [NSString stringWithFormat:
+            @"❌ 只有 %.1f 秒，太短（官方下限 3 秒），提不出声纹。\n"
+            @"请选一段【同一个人连续说话、安静无 BGM】的 10~30 秒音频。", dur];
+    } else if (dur > 60.0) {
+        self.statusLabel.text = [NSString stringWithFormat:
+            @"⚠️ %.1f 秒偏长，服务端只会取一小段做声纹。\n"
+            @"建议自己先裁到 20~30 秒（当前取 %.0f 秒），相似度更稳。", dur, MVCloneMaxLen()];
+    } else if (dur > 30.0) {
+        self.statusLabel.text = [NSString stringWithFormat:
+            @"✅ 已选择（%.1f 秒）。超过 30 秒部分不会用到，服务端取 %.0f 秒。", dur, MVCloneMaxLen()];
+    } else {
+        self.statusLabel.text = @"";
+    }
 }
 
 - (void)doUploadClone {
@@ -328,6 +386,43 @@
         }];
 }
 
+#pragma mark - ★ 2.8.6 新增
+
+// 切换复刻模型：立刻落盘（MVCosyModel 读的就是这个键），并刷新方言能力提示
+- (void)onModelChanged:(UISegmentedControl*)seg {
+    NSArray *list = MVCosyModelList();
+    NSInteger i = seg.selectedSegmentIndex;
+    if (i < 0 || i >= (NSInteger)list.count) return;
+    MVSetShared(@"cosyModel", list[(NSUInteger)i]);
+    [self refreshModelHint];
+}
+
+// 提示这个模型以后能说哪些方言 —— 这是"复刻完发现说不了方言"的唯一预防点
+- (void)refreshModelHint {
+    if (!self.modelHint) return;
+    NSString *m = MVCosyModel();
+    NSArray *ds = MVDialectListForModel(m);
+    if (!ds.count) {
+        self.modelHint.text = [NSString stringWithFormat:@"%@ · 不支持方言指令", m];
+        return;
+    }
+    NSString *note = [m hasPrefix:@"qwen-audio-3.0-tts"] ? @"（含湖南话/重庆话）" : @"";
+    self.modelHint.text = [NSString stringWithFormat:@"%@ · 可用方言 %lu 种%@",
+                           m, (unsigned long)ds.count, note];
+}
+
+- (void)onPreprocChanged:(UISwitch*)sw { MVSetShared(@"clonePreprocess", @(sw.on)); }
+
+// 克隆成功就地试听：不必回面板发一条才知道像不像
+- (void)auditionVoice:(NSString*)voiceID {
+    if (!voiceID.length) return;
+    if (MVEngineMode() != 1 || !MVAPIKey().length) return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [MyVoiceEngine previewText:@"这个是新克隆的音色，你听一下，像不像。" voiceID:voiceID];
+    });
+}
+
 - (void)saveVoice:(NSString*)name voiceID:(NSString*)voiceID model:(NSString*)model {
     if (!voiceID.length) return;
     if (!model.length) model = MVCosyModel();
@@ -359,6 +454,8 @@
     MVSetShared(@"ttsProvider", @0);    // ★ 关键：切到 CosyVoice，克隆才会被用上
     MVSetShared(@"cosyModel", model);   // 复刻 / 合成统一用这个模型
     MVLog(@"[clone] 已保存音色 %@ -> %@ (%@)，并自动切换 ttsProvider=0", entry[@"name"], voiceID, model);
+    // ★ 2.8.6：存完立刻试听一句（合成走刚选中的音色）
+    [self auditionVoice:voiceID];
 }
 
 - (void)dismiss { [self dismissViewControllerAnimated:YES completion:nil]; }

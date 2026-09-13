@@ -618,14 +618,24 @@ static inline uint32_t MVrd32(const uint8_t *p) {
     NSString *apiKey = MVAPIKey();
     NSString *host = [self maasHost];
     NSString *cu = [host stringByAppendingString:@"/services/audio/tts/customization"];
+    // ★ 2.8.6：补齐官方 voice-enrollment 的三个质量参数（旧版一个都没传）。
+    //   language_hints  帮模型对准语种，音色特征提得更准；
+    //   max_prompt_audio_length 决定拿多少秒音频做声纹（默认 10s，本插件默认 20s）；
+    //   enable_preprocess 降噪/增强（安静干声关掉更还原）。这三项只对部分模型生效，
+    //   所以按模型判断后再带，避免给 cosyvoice-v3-plus / v2 传了直接 400。
+    NSMutableDictionary *in = [NSMutableDictionary dictionary];
+    in[@"action"]       = @"create_voice";
+    in[@"target_model"] = MVCosyModel();
+    in[@"prefix"]       = @"myvoice";
+    in[@"url"]          = audioURL;
+    in[@"language_hints"] = @[@"zh"];
+    if (MVCloneSupportsQuality(MVCosyModel())) {
+        in[@"max_prompt_audio_length"] = @(MVCloneMaxLen());
+        in[@"enable_preprocess"]       = MVClonePreprocess() ? @YES : @NO;
+    }
     NSDictionary *body = @{
         @"model": @"voice-enrollment",
-        @"input": @{
-            @"action": @"create_voice",
-            @"target_model": MVCosyModel(),
-            @"prefix": @"myvoice",
-            @"url": audioURL
-        }
+        @"input": in
     };
     NSData *json = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:cu]];
@@ -635,7 +645,8 @@ static inline uint32_t MVrd32(const uint8_t *p) {
     if (resolve) [req setValue:@"enable" forHTTPHeaderField:@"X-DashScope-OssResourceResolve"];
     req.HTTPBody = json;
     req.timeoutInterval = 60;
-    MVLog(@"[cloud] 复刻请求 url=%@ resolve=%d", audioURL, resolve);
+    MVLog(@"[cloud] 复刻请求 url=%@ resolve=%d target_model=%@ maxLen=%.0fs preprocess=%d",
+          audioURL, resolve, MVCosyModel(), MVCloneMaxLen(), (int)MVClonePreprocess());
     [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *err){
         if (err) { completion(nil, err); return; }
         NSInteger code = [(NSHTTPURLResponse*)r statusCode];
