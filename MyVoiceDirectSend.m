@@ -401,7 +401,11 @@ static id MVQQAllocHook(id self, SEL _cmd) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             BOOL ok = NO;
-            @try { ok = [(id)target isStartSuccess]; } @catch (NSException *e) {}
+            @try {
+                SEL isss = NSSelectorFromString(@"isStartSuccess");
+                if ([(id)target respondsToSelector:isss])
+                    ok = ((BOOL(*)(id, SEL))objc_msgSend)(target, isss);
+            } @catch (NSException *e) {}
             if (!ok) {
                 qqFailed = YES;
                 MVLog(@"[direct] ❌ QQ isStartSuccess=NO（聊天可能已切换，需重新按住激活）");
