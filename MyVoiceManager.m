@@ -106,8 +106,8 @@ static void MVSettingsChanged(CFNotificationCenterRef center, void *observer,
     if (!w) return;
     UILabel *l = [[UILabel alloc] init];
     l.text = msg; l.font = [UIFont systemFontOfSize:13];
-    l.textColor = UIColor.whiteColor;
-    l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.8];
+    l.textColor = [UIColor colorWithWhite:0 alpha:0.85];
+    l.backgroundColor = [UIColor colorWithWhite:1 alpha:0.88];
     l.layer.cornerRadius = 8; l.clipsToBounds = YES;
     l.numberOfLines = 0; l.textAlignment = NSTextAlignmentCenter;
     CGSize s = [l.text boundingRectWithSize:CGSizeMake(240, 80)
