@@ -243,9 +243,16 @@
     BOOL isSilk = (hb && scan >= 6 && memmem(hb, scan, "#!SILK", 6) != NULL);
     BOOL isAMR  = (hb && scan >= 5 && memmem(hb, scan, "#!AMR", 5) != NULL);
     if (isSilk) {
-        // 微信/QQ 语音：内嵌 SILK 解码器本地解成 wav（不再需要电脑转码）
+        // ★ 2.8.11 修复：安全作用域资源必须【先拷贝到临时目录、后释放访问权限】。
+        //   2.8.10 在 stopAccessing 之后再读原路径 → fopen 失败 → 错误码 -2（实机复现）。
+        //   与下面普通分支的拷贝顺序保持一致。
+        NSString *tmpIn = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                           [NSString stringWithFormat:@"mv_aud_%@.aud", [[NSUUID UUID] UUIDString]]];
+        NSError *ce = nil;
+        [[NSFileManager defaultManager] copyItemAtURL:src toURL:[NSURL fileURLWithPath:tmpIn] error:&ce];
         [src stopAccessingSecurityScopedResource];
-        [self decodeSilkFromURL:src];
+        if (ce) { self.statusLabel.text = [@"读取文件失败：" stringByAppendingString:ce.localizedDescription]; return; }
+        [self decodeSilkFromPath:tmpIn name:src.lastPathComponent];
         return;
     }
     if (isAMR) ext = @"amr";   // 强制按 amr 落盘，帮 AVFoundation 认容器
@@ -265,13 +272,13 @@
 }
 
 // ★ 2.8.10：SILK（微信 .aud）本地解码 → wav → 时长校验，全程在手机上完成
-- (void)decodeSilkFromURL:(NSURL*)src {
+// ★ 2.8.11：入参改为已拷贝到临时目录的本地路径（安全作用域资源不能跨释放访问）
+- (void)decodeSilkFromPath:(NSString*)inPath name:(NSString*)origName {
     self.uploadPath = nil;
-    self.uploadName = src.lastPathComponent;
+    self.uploadName = origName;
     self.pickedLabel.text = [NSString stringWithFormat:@"已选择：%@", self.uploadName];
     self.statusLabel.text = @"正在解码 .aud（微信语音）…";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSString *inPath  = src.path ?: @"";
         NSString *wavPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
                              [NSString stringWithFormat:@"mv_silk_%@.wav", [[NSUUID UUID] UUIDString]]];
         double secs = 0;

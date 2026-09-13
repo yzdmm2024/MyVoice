@@ -1,8 +1,8 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 2.8.10
+Version: 2.8.11
 Architecture: iphoneos-arm64
-Description: 节约时间，打字即可。★ 2.8.10 微信语音 .aud 直选支持：内嵌腾讯 SILK 解码器，选 .aud 后手机本地解码成 wav 再克隆，无需电脑转码；修复 2.8.9 的魔数检测被微信 1 字节版本前缀绕过的 bug。另优化主界面排版：输入框加高 84→124、各行间距均匀化、状态行上移，消除「音色管理」与「已连接」之间的大片空白。
+Description: 节约时间，打字即可。★ 2.8.11 修复 .aud 解码错误码 -2：SILK 分支在释放文件访问权限后才读原文件，fopen 必败；改为先拷贝到临时目录再解码，与其他分支一致。
 Maintainer: yzdmm2024
 Author: yzdmm2024
 Section: Tweaks
