@@ -70,7 +70,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.8.4（修复克隆不生效：自动切克隆音色 + 统一复刻/合成模型）");
+        MVLog(@"载入 我的语音 v2.8.5（克隆音色补齐表现参数 + 一键风格/音高 + 文本一键纠偏）");
         MVLog(@"宿主 App：%@（版本 %@）",
               [NSBundle mainBundle].bundleIdentifier ?: @"?",
               [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");

@@ -97,8 +97,13 @@ static NSString* MVTTSCacheKey(NSString *text, NSString *voiceID) {
                 MVQwenModel(), (voiceID.length ? voiceID : MVQwenVoice()),
                 MVQwenEmotion(), MVQwenSpeed(), text];
     }
-    return [NSString stringWithFormat:@"c|%@|%@|%@",
-            MVCurrentModel(), (voiceID.length ? voiceID : @""), text];
+    // ★ 2.8.5：key 必须带上全部表现参数。
+    //   旧版只含 model|voiceID|text —— 改了风格/语速/音高仍然命中旧音频，
+    //   表现就是"调了没用"（跟语速滑块对克隆无效是同一类坑）。
+    return [NSString stringWithFormat:@"c|%@|%@|%ld|%.2f|%.2f|%ld|%@|%@",
+            MVCurrentModel(), (voiceID.length ? voiceID : @""),
+            (long)MVCosyStyle(), MVCosyRate(), MVCosyPitch(), (long)MVCosyVolume(),
+            MVCosyInstruction() ?: @"", text];
 }
 
 static NSData* MVTTSCacheGet(NSString *key) {
@@ -314,16 +319,41 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
     NSString *url = [host stringByAppendingString:@"/services/audio/tts/SpeechSynthesizer"];
     // ★ 2.4.3：format/sample_rate 属于 parameters（PC 端 200 实测格式）；
     //   放在 input 里部分网关会忽略，且响应字段也不是当初以为的 audio_url。
+    // ★ 2.8.5：补齐官方支持、但旧版一直没传的表现参数 —— 这组参数直接决定"像不像真人"。
+    //   不传 = 模型默认朗读腔（字正腔圆、每字等长、句尾一律降调）= 浓烈 AI 味。
+    //   instruction 仅在 v3.5-flash / v3.5-plus / v3-flash 上可用，其它模型传了会 400，故先判断。
+    double rate   = MVCosyRate();
+    double pitch  = MVCosyPitch();
+    NSInteger vol = MVCosyVolume();
+    NSString *inst = MVCosyInstruction();
+    BOOL instOK = (inst.length > 0) && MVCosySupportsInstruction(model);
+
+    NSMutableDictionary *params = [NSMutableDictionary dictionary];
+    params[@"format"] = @"wav";
+    params[@"sample_rate"] = @16000;
+    params[@"language_hints"] = @[@"zh"];              // 数字/英文/符号按中文读法
+    if (fabs(rate - 1.0)  > 0.001) params[@"rate"]  = @(rate);
+    if (fabs(pitch - 1.0) > 0.001) params[@"pitch"] = @(pitch);
+    if (vol != 50)                 params[@"volume"] = @(vol);
+    if (instOK)                    params[@"instruction"] = inst;
+
+    // 兼容两版文档：新版把 format/sample_rate 放在 input 里，老网关认 parameters。
+    // 两处都写，服务端取其一，多余的键会被忽略（不会 400）。
+    NSMutableDictionary *input = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"text": text,
+        @"voice": voiceID,
+        @"format": @"wav",
+        @"sample_rate": @16000
+    }];
+    if (fabs(rate - 1.0)  > 0.001) input[@"rate"]  = @(rate);
+    if (fabs(pitch - 1.0) > 0.001) input[@"pitch"] = @(pitch);
+    if (vol != 50)                 input[@"volume"] = @(vol);
+    if (instOK)                    input[@"instruction"] = inst;
+
     NSDictionary *body = @{
         @"model": model,
-        @"input": @{
-            @"text": text,
-            @"voice": voiceID
-        },
-        @"parameters": @{
-            @"format": @"wav",
-            @"sample_rate": @16000
-        }
+        @"input": input,
+        @"parameters": params
     };
     NSData *json = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 
@@ -334,7 +364,9 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
     req.HTTPBody = json;
     req.timeoutInterval = 60;
 
-    MVLog(@"[cloud] TTS 请求 model=%@ voice=%@ textLen=%lu", model, voiceID, (unsigned long)text.length);
+    MVLog(@"[cloud] TTS 请求 model=%@ voice=%@ textLen=%lu rate=%.2f pitch=%.2f vol=%ld inst=%@",
+          model, voiceID, (unsigned long)text.length, rate, pitch, (long)vol,
+          instOK ? inst : @"（未启用）");
     NSURLSession *s = [NSURLSession sharedSession];
     [[s dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e){
         if (e) { MVLog(@"[cloud] TTS 网络错误 %@", e); completion(nil, e); return; }

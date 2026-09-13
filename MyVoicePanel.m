@@ -8,7 +8,7 @@
 #import <UIKit/UIKit.h>
 
 #define MV_PANEL_W 320.0
-#define MV_PANEL_H 280.0
+#define MV_PANEL_H 360.0
 #define MV_FAB_SIZE 38.0
 
 @interface MyVoicePanel () <UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate>
@@ -28,6 +28,13 @@
 @property (nonatomic, strong) UISlider *speedSlider;
 @property (nonatomic, strong) UILabel *speedLabel;
 @property (nonatomic, strong) UISegmentedControl *emotionSeg;
+@property (nonatomic, strong) UILabel *toneLabel;
+@property (nonatomic, strong) UIScrollView *styleScroll;
+@property (nonatomic, strong) NSArray *styleButtons;
+@property (nonatomic, strong) UISlider *pitchSlider;
+@property (nonatomic, strong) UILabel *pitchLabel;
+@property (nonatomic, strong) UILabel *pitchValueLabel;
+@property (nonatomic, strong) UIButton *polishBtn;
 @property (nonatomic, strong) UILabel *pickerHintLabel;
 @property (nonatomic, strong) UILabel *sectionLabel;
 @property (nonatomic, strong) UITableView *voiceTable;
@@ -261,7 +268,7 @@
     [self.homeView addSubview:title];
 
     // 文字输入
-    self.textView = [[UITextView alloc] initWithFrame:CGRectMake(14, 38, W - 28, 64)];
+    self.textView = [[UITextView alloc] initWithFrame:CGRectMake(14, 36, W - 28, 84)];
     self.textView.layer.cornerRadius = 14;
     self.textView.font = [UIFont systemFontOfSize:15];
     self.textView.textColor = [UIColor colorWithWhite:0 alpha:0.85];
@@ -276,9 +283,23 @@
                                                  name:UITextViewTextDidChangeNotification
                                                object:self.textView];
 
+    // ★ 2.8.5：文本一键纠偏（数字读法 / 标点 / 断句 / 符号），点一下改"该怎么念"
+    self.polishBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    self.polishBtn.frame = CGRectMake(14, 126, W - 28, 30);
+    [self.polishBtn setTitle:@"✨ 一键纠偏（数字 · 标点 · 断句）" forState:UIControlStateNormal];
+    self.polishBtn.titleLabel.font = [UIFont systemFontOfSize:12.5 weight:UIFontWeightMedium];
+    [self.polishBtn setTitleColor:[UIColor colorWithRed:0 green:0.42 blue:0.95 alpha:1]
+                         forState:UIControlStateNormal];
+    self.polishBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.04];
+    self.polishBtn.layer.cornerRadius = 12;
+    self.polishBtn.layer.borderWidth = 0.5;
+    self.polishBtn.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.06].CGColor;
+    [self.polishBtn addTarget:self action:@selector(onPolish) forControlEvents:UIControlEventTouchUpInside];
+    [self.homeView addSubview:self.polishBtn];
+
     // 音色选择（一行）
     self.voiceSelectBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.voiceSelectBtn.frame = CGRectMake(14, 108, W - 28, 40);
+    self.voiceSelectBtn.frame = CGRectMake(14, 164, W - 28, 40);
     self.voiceSelectBtn.titleLabel.adjustsFontSizeToFitWidth = YES;
     self.voiceSelectBtn.titleLabel.minimumScaleFactor = 0.72;
     self.voiceSelectBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.04];
@@ -292,7 +313,7 @@
 
     // 合成 + 预览并排
     self.sendBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.sendBtn.frame = CGRectMake(14, 156, (W - 38) * 0.58, 42);
+    self.sendBtn.frame = CGRectMake(14, 212, (W - 38) * 0.58, 42);
     [self.sendBtn setTitle:@"合成语音" forState:UIControlStateNormal];
     self.sendBtn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
     [self.sendBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
@@ -317,7 +338,7 @@
     [self.homeView addSubview:self.sendBtn];
 
     self.previewBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.previewBtn.frame = CGRectMake(14 + (W - 38) * 0.58 + 10, 156, (W - 38) * 0.42 - 10, 42);
+    self.previewBtn.frame = CGRectMake(14 + (W - 38) * 0.58 + 10, 212, (W - 38) * 0.42 - 10, 42);
     [self.previewBtn setTitle:@"预览" forState:UIControlStateNormal];
     self.previewBtn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
     [self.previewBtn setTitleColor:[UIColor colorWithWhite:0 alpha:0.65] forState:UIControlStateNormal];
@@ -334,7 +355,7 @@
 
     // 音色管理（独立一行短标题）
     self.cloneBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.cloneBtn.frame = CGRectMake(14, 206, W - 28, 40);
+    self.cloneBtn.frame = CGRectMake(14, 262, W - 28, 40);
     [self.cloneBtn setTitle:@"＋ 音色管理" forState:UIControlStateNormal];
     self.cloneBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
     [self.cloneBtn setTitleColor:[UIColor colorWithRed:0 green:0.42 blue:0.95 alpha:1] forState:UIControlStateNormal];
@@ -346,7 +367,7 @@
     [self.homeView addSubview:self.cloneBtn];
 
     // 会话状态（绿点 + 文字）
-    self.sessionLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, 252, W - 32, 18)];
+    self.sessionLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, 312, W - 32, 18)];
     self.sessionLabel.font = [UIFont systemFontOfSize:11];
     self.sessionLabel.textColor = [UIColor colorWithWhite:0 alpha:0.3];
     self.sessionLabel.userInteractionEnabled = YES;
@@ -379,6 +400,16 @@
     [attr appendAttributedString:[[NSAttributedString alloc] initWithString:@"  ›" attributes:@{NSFontAttributeName:[UIFont systemFontOfSize:12], NSForegroundColorAttributeName:[UIColor colorWithWhite:0 alpha:0.2]}]];
     [self.voiceSelectBtn setAttributedTitle:attr forState:UIControlStateNormal];
     if (self.voiceTable) [self.voiceTable reloadData];
+
+    // ★ 2.8.5：把当前 provider 对应的参数回填到控件，并按 provider 重新摆位
+    BOOL cosy = (MVTTSProvider() == 0);
+    if (self.speedSlider)     self.speedSlider.value = cosy ? (float)MVCosyRate() : (float)MVQwenSpeed();
+    if (self.speedLabel)      [self updateSpeedLabel];
+    if (self.pitchSlider)     self.pitchSlider.value = (float)MVCosyPitch();
+    if (self.pitchValueLabel) [self updatePitchLabel];
+    if (self.emotionSeg)      self.emotionSeg.selectedSegmentIndex = [self emotionIndex:MVQwenEmotion()];
+    [self updateStyleButtons];
+    [self layoutPickerRows];
 }
 
 #pragma mark - 音色选择视图
@@ -442,17 +473,63 @@
     [self.pickerView addSubview:self.speedLabel];
     y += 20;
 
-    UILabel *el = [[UILabel alloc] initWithFrame:CGRectMake(14, y, 36, 18)];
-    el.text = @"语气";
-    el.font = [UIFont systemFontOfSize:11];
-    el.textColor = [UIColor colorWithWhite:0 alpha:0.4];
-    [self.pickerView addSubview:el];
+    // ★ 2.8.5：这一行按 provider 换内容 ——
+    //   千问 = 「语气」段控；克隆 = 「一键风格」胶囊（默认/人情味/标准腔/慢语速/亲切/活泼）
+    self.toneLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, y + 3, 36, 18)];
+    self.toneLabel.text = @"语气";
+    self.toneLabel.font = [UIFont systemFontOfSize:11];
+    self.toneLabel.textColor = [UIColor colorWithWhite:0 alpha:0.4];
+    [self.pickerView addSubview:self.toneLabel];
+
     self.emotionSeg = [[UISegmentedControl alloc] initWithItems:@[@"默认", @"生气", @"愤怒", @"快乐", @"开朗"]];
     self.emotionSeg.frame = CGRectMake(52, y, W - 66, 22);
     self.emotionSeg.selectedSegmentIndex = [self emotionIndex:MVQwenEmotion()];
     [self.emotionSeg addTarget:self action:@selector(onEmotionChanged:) forControlEvents:UIControlEventValueChanged];
     [self.pickerView addSubview:self.emotionSeg];
-    y += 24;
+
+    self.styleScroll = [[UIScrollView alloc] initWithFrame:CGRectMake(12, y, W - 24, 26)];
+    self.styleScroll.showsHorizontalScrollIndicator = NO;
+    self.styleScroll.alwaysBounceHorizontal = YES;
+    NSArray *styleNames = MVCosyStyleNames();
+    NSMutableArray *styleBtns = [NSMutableArray array];
+    CGFloat bx = 0;
+    for (NSUInteger i = 0; i < styleNames.count; i++) {
+        NSString *t = styleNames[i];
+        CGFloat bw = [t sizeWithAttributes:@{NSFontAttributeName:[UIFont systemFontOfSize:12]}].width + 18;
+        UIButton *sb = [UIButton buttonWithType:UIButtonTypeCustom];
+        sb.frame = CGRectMake(bx, 1, bw, 24);
+        [sb setTitle:t forState:UIControlStateNormal];
+        sb.titleLabel.font = [UIFont systemFontOfSize:12];
+        sb.tag = 2000 + (NSInteger)i;
+        sb.layer.cornerRadius = 12;
+        sb.layer.borderWidth = 0.5;
+        [sb addTarget:self action:@selector(onStyleTap:) forControlEvents:UIControlEventTouchUpInside];
+        [self.styleScroll addSubview:sb];
+        [styleBtns addObject:sb];
+        bx += bw + 6;
+    }
+    self.styleScroll.contentSize = CGSizeMake(bx, 26);
+    self.styleButtons = styleBtns;
+    [self.pickerView addSubview:self.styleScroll];
+
+    // 音高（仅克隆音色可见；千问分支摆位时隐藏）
+    self.pitchLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, y, 36, 18)];
+    self.pitchLabel.text = @"音高";
+    self.pitchLabel.font = [UIFont systemFontOfSize:11];
+    self.pitchLabel.textColor = [UIColor colorWithWhite:0 alpha:0.4];
+    [self.pickerView addSubview:self.pitchLabel];
+    self.pitchSlider = [[UISlider alloc] initWithFrame:CGRectMake(52, y, W - 126, 18)];
+    self.pitchSlider.minimumValue = 0.5f;
+    self.pitchSlider.maximumValue = 2.0f;
+    self.pitchSlider.value = (float)MVCosyPitch();
+    [self.pitchSlider addTarget:self action:@selector(onPitchChanged:) forControlEvents:UIControlEventValueChanged];
+    [self.pickerView addSubview:self.pitchSlider];
+    self.pitchValueLabel = [[UILabel alloc] initWithFrame:CGRectMake(W - 66, y, 52, 18)];
+    self.pitchValueLabel.font = [UIFont systemFontOfSize:11];
+    self.pitchValueLabel.textAlignment = NSTextAlignmentRight;
+    self.pitchValueLabel.textColor = [UIColor colorWithWhite:0 alpha:0.5];
+    [self updatePitchLabel];
+    [self.pickerView addSubview:self.pitchValueLabel];
 
     self.sectionLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, y, W - 28, 14)];
     NSUInteger nQwen = 0, nMine = 0;
@@ -478,6 +555,40 @@
         initWithTarget:self action:@selector(onVoiceLongPress:)];
     lpDel.minimumPressDuration = 0.6;
     [self.voiceTable addGestureRecognizer:lpDel];
+
+    [self updateStyleButtons];      // ★ 2.8.5
+    [self layoutPickerRows];        // ★ 2.8.5：按当前 provider 摆位（音高行仅克隆可见）
+}
+
+// ★ 2.8.5：选择音色页下半部分按 provider 动态摆位。
+//   千问不支持 instruction/音高 → 隐藏音高行，把音色表格往上提，多露一行。
+- (void)layoutPickerRows {
+    CGFloat W = MV_PANEL_W, H = MV_PANEL_H;
+    BOOL cosy = (MVTTSProvider() == 0);
+
+    self.toneLabel.text = cosy ? @"风格" : @"语气";
+    self.emotionSeg.hidden = cosy;
+    self.styleScroll.hidden = !cosy;
+
+    CGFloat y = 84;                                        // 语气 / 风格行
+    self.toneLabel.frame   = CGRectMake(14, y + 3, 36, 18);
+    self.emotionSeg.frame  = CGRectMake(52, y, W - 66, 22);
+    self.styleScroll.frame = CGRectMake(12, y, W - 24, 26);
+    y += 26;
+
+    self.pitchLabel.hidden      = !cosy;                   // 音高行（仅克隆）
+    self.pitchSlider.hidden     = !cosy;
+    self.pitchValueLabel.hidden = !cosy;
+    if (cosy) {
+        self.pitchLabel.frame      = CGRectMake(14, y, 36, 18);
+        self.pitchSlider.frame     = CGRectMake(52, y, W - 126, 18);
+        self.pitchValueLabel.frame = CGRectMake(W - 66, y, 52, 18);
+        y += 20;
+    }
+
+    self.sectionLabel.frame = CGRectMake(14, y, W - 28, 14);
+    y += 16;
+    self.voiceTable.frame = CGRectMake(12, y, W - 24, H - y - 8);
 }
 
 - (NSInteger)emotionIndex:(NSString*)emotion {
@@ -489,10 +600,59 @@
     return arr[idx];
 }
 - (void)updateSpeedLabel { self.speedLabel.text = [NSString stringWithFormat:@"%.2fx", self.speedSlider.value]; }
-- (void)onSpeedChanged:(UISlider*)s { [self updateSpeedLabel]; MVSetShared(@"qwenSpeed", @(s.value)); }
+// ★ 2.8.5：语速滑块以前只写 qwenSpeed，克隆分支根本不读 → 用克隆音色时它是个摆设。
+//   现在按 provider 分流落到各自的键，两个 provider 都真正生效。
+- (void)onSpeedChanged:(UISlider*)s {
+    [self updateSpeedLabel];
+    if (MVTTSProvider() == 1) MVSetShared(@"qwenSpeed", @(s.value));
+    else                      MVSetShared(@"cosyRate",  @(s.value));
+}
 - (void)onEmotionChanged:(UISegmentedControl*)seg { MVSetShared(@"qwenEmotion", [self emotionValueForIndex:seg.selectedSegmentIndex]); }
+
+// ★ 2.8.5：一键风格 —— 落到 CosyVoice 的 instruction（这是"去 AI 味"最有效的旋钮）
+- (void)onStyleTap:(UIButton*)b {
+    NSInteger idx = b.tag - 2000;
+    MVSetShared(@"cosyStyle", @(idx));
+    MVSetShared(@"cosyInstruction", @"");          // 选预设时清掉自定义指令，避免互相覆盖
+    [self updateStyleButtons];
+    [MyVoiceCloud clearSynthesisCache];
+    [self prewarmNow];
+    NSArray *names = MVCosyStyleNames();
+    [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"风格：%@",
+        (idx >= 0 && idx < (NSInteger)names.count) ? names[(NSUInteger)idx] : @"默认"]];
+}
+- (void)updateStyleButtons {
+    NSInteger cur = MVCosyStyle();
+    for (UIButton *b in self.styleButtons) {
+        BOOL on = (b.tag - 2000) == cur;
+        b.backgroundColor = on ? [UIColor colorWithRed:0 green:0.42 blue:0.95 alpha:0.9]
+                               : [UIColor colorWithWhite:0 alpha:0.05];
+        b.layer.borderColor = on ? [UIColor clearColor].CGColor
+                                 : [UIColor colorWithWhite:0 alpha:0.08].CGColor;
+        [b setTitleColor:(on ? [UIColor whiteColor] : [UIColor colorWithWhite:0 alpha:0.5])
+                forState:UIControlStateNormal];
+    }
+}
+- (void)updatePitchLabel { self.pitchValueLabel.text = [NSString stringWithFormat:@"%.2fx", self.pitchSlider.value]; }
+- (void)onPitchChanged:(UISlider*)s { [self updatePitchLabel]; MVSetShared(@"cosyPitch", @(s.value)); }
+
+// ★ 2.8.5：文本一键纠偏 —— TTS 对阿拉伯数字/英符号/无标点长句念得怪，书面写法也加重 AI 味
+- (void)onPolish {
+    NSString *src = self.textView.text ?: @"";
+    if (!src.length) { [[MyVoiceManager shared] toast:@"请先输入文字"]; return; }
+    NSMutableArray *notes = [NSMutableArray array];
+    NSString *dst = MVTextPolish(src, notes);
+    if ([dst isEqualToString:src]) {
+        [[MyVoiceManager shared] toast:@"已经很规整，无需纠偏"];
+        return;
+    }
+    self.textView.text = dst;                      // 会触发 TextDidChange → 自动预合成
+    [[MyVoiceManager shared] toast:notes.count
+        ? [NSString stringWithFormat:@"已纠偏：%@", [notes componentsJoinedByString:@"、"]]
+        : @"已纠偏"];
+}
 - (void)onReloadVoices { [self refreshVoiceState]; [self.voiceTable reloadData]; [[MyVoiceManager shared] toast:@"已刷新"]; }
-- (void)showPicker { self.homeView.hidden = YES; self.pickerView.hidden = NO; [self refreshVoiceState]; [self.searchBar resignFirstResponder]; }
+- (void)showPicker { self.homeView.hidden = YES; self.pickerView.hidden = NO; [self refreshVoiceState]; [self layoutPickerRows]; [self.searchBar resignFirstResponder]; }
 - (void)hidePicker { self.pickerView.hidden = YES; self.homeView.hidden = NO; [self refreshVoiceState]; }
 
 #pragma mark - 搜索

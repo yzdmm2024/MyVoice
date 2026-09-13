@@ -283,6 +283,212 @@ static inline double MVQwenSpeed(void) {
     return 1.0;
 }
 
+// ===== ★ 2.8.5：CosyVoice 克隆音色的「表现参数」 =====
+// 官方 SpeechSynthesizer 支持 rate / pitch / volume / instruction / language_hints，
+// 但 2.8.4 及以前一个都没传 → 克隆音色只能用模型默认的朗读腔（字正腔圆、每字等长）
+// = 用户说的"浓烈 AI 味"。这里全部补齐，并把「一键风格」落到 instruction 上。
+//
+// 一键风格 id：0=默认 1=人情味 2=标准腔 3=慢语速 4=亲切 5=活泼
+static inline NSInteger MVCosyStyle(void) {
+    id v = MVGet(@"cosyStyle");
+    return v ? [v integerValue] : 0;
+}
+static inline NSArray* MVCosyStyleNames(void) {
+    return @[@"默认", @"人情味", @"标准腔", @"慢语速", @"亲切", @"活泼"];
+}
+// instruction：自定义指令优先，其次按一键风格取预设；返回 nil 表示不传
+static inline NSString* MVCosyInstruction(void) {
+    NSString *custom = MVGetStr(@"cosyInstruction");
+    if (custom.length) return custom;
+    switch (MVCosyStyle()) {
+        case 1: return @"用自然随意的日常聊天语气说，像跟朋友发语音一样，语速自然，不要播音腔";
+        case 2: return @"用标准播报腔，字正腔圆，语气平稳，吐字清晰";
+        case 3: return @"语速放慢，吐字清晰，句子之间自然停顿";
+        case 4: return @"语气温和亲切，像长辈在关心人，语速舒缓";
+        case 5: return @"语气活泼俏皮，带一点笑意，节奏轻快";
+        default: return nil;
+    }
+}
+// 语速 0.5~2.0：没单独设过就回落到千问语速，老用户行为不变
+static inline double MVCosyRate(void) {
+    id v = MVGet(@"cosyRate");
+    if (v) { double d = [v doubleValue]; if (d >= 0.5 && d <= 2.0) return d; }
+    return MVQwenSpeed();
+}
+// 音高 0.5~2.0，默认 1.0（只做微调；调太大会有"变声器"感，反而更假）
+static inline double MVCosyPitch(void) {
+    id v = MVGet(@"cosyPitch");
+    if (v) { double d = [v doubleValue]; if (d >= 0.5 && d <= 2.0) return d; }
+    return 1.0;
+}
+// 音量 0~100，默认 50（= 官方标准音量）
+static inline NSInteger MVCosyVolume(void) {
+    id v = MVGet(@"cosyVolume");
+    if (v) { NSInteger n = [v integerValue]; if (n >= 0 && n <= 100) return n; }
+    return 50;
+}
+// instruction 只有 v3.5-flash / v3.5-plus / v3-flash 支持；其它模型传了会 400
+static inline BOOL MVCosySupportsInstruction(NSString *model) {
+    if (!model.length) return NO;
+    if ([model hasPrefix:@"cosyvoice-v3.5-"]) return YES;
+    if ([model isEqualToString:@"cosyvoice-v3-flash"]) return YES;
+    return NO;
+}
+
+// ===== ★ 2.8.5：文本「一键纠偏」（纯本地规则，零网络） =====
+// TTS 对「阿拉伯数字 / 英文符号 / 无标点长句」念得很怪，书面写法也加重 AI 味。
+// 这里做确定性修正：不改变原意，只改"该怎么念"。
+static inline BOOL MVIsPunctChar(unichar c) {
+    switch (c) {
+        case 0x3002: case 0xFF0C: case 0xFF01: case 0xFF1F: case 0xFF1B:
+        case 0xFF1A: case 0x3001: case 0x2026: case 0x2014: case 0xFF5E:
+        case '.': case ',': case '!': case '?': case ';': case ':': case '~':
+            return YES;
+        default: return NO;
+    }
+}
+// 阿拉伯数字串 → 中文读法
+//   1 位     → 零..九
+//   2 位     → 十 / 十几 / 几十几
+//   3 位整百 → 几百
+//   其余     → 逐位（年份 2026→二零二六、报警号 110→一一零、编号 1001→一零零一）
+static inline NSString* MVNumberToChinese(NSString *digits) {
+    NSArray *d = @[@"零",@"一",@"二",@"三",@"四",@"五",@"六",@"七",@"八",@"九"];
+    NSUInteger len = digits.length;
+    if (!len) return digits;
+    if (len == 1) return d[(NSUInteger)[digits intValue]];
+    if (len == 2) {
+        int v = [digits intValue];
+        if (v < 10)  return d[(NSUInteger)v];
+        if (v == 10) return @"十";
+        if (v < 20)  return [NSString stringWithFormat:@"十%@", d[(NSUInteger)(v % 10)]];
+        int t = v / 10, o = v % 10;
+        return o ? [NSString stringWithFormat:@"%@十%@", d[(NSUInteger)t], d[(NSUInteger)o]]
+                 : [NSString stringWithFormat:@"%@十", d[(NSUInteger)t]];
+    }
+    if (len == 3) {
+        int v = [digits intValue];
+        if (v % 100 == 0) return [NSString stringWithFormat:@"%@百", d[(NSUInteger)(v / 100)]];
+    }
+    NSMutableString *s = [NSMutableString string];
+    for (NSUInteger i = 0; i < len; i++) {
+        unichar c = [digits characterAtIndex:i];
+        if (c >= '0' && c <= '9') [s appendString:d[(NSUInteger)(c - '0')]];
+    }
+    return s;
+}
+// 返回纠偏后的文本；notes（可传 nil）收集改动摘要，供 UI 提示
+static inline NSString* MVTextPolish(NSString *src, NSMutableArray *notes) {
+    if (!src.length) return src;
+    NSMutableString *out = [NSMutableString stringWithString:src];
+
+    // ① 百分号：先把 "50%" 变成 "百分之50"，让后面的数字规则统一转中文
+    NSInteger pct = 0;
+    {
+        NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"([0-9]+)%"
+                                                                          options:0 error:nil];
+        NSUInteger m = [re numberOfMatchesInString:out options:0 range:NSMakeRange(0, out.length)];
+        if (m) {
+            pct = (NSInteger)m;
+            [re replaceMatchesInString:out options:0
+                                 range:NSMakeRange(0, out.length)
+                          withTemplate:@"百分之$1"];
+        }
+    }
+    // ② 符号 → 读法
+    NSInteger sym = 0;
+    {
+        NSArray *pairs = @[@[@"@", @"艾特"], @[@"&", @"和"], @[@"＋", @"加"], @[@"+", @"加"]];
+        for (NSArray *p in pairs) {
+            while ([out rangeOfString:p[0]].location != NSNotFound) {
+                [out replaceCharactersInRange:[out rangeOfString:p[0]] withString:p[1]];
+                sym++;
+                if (sym > 60) break;
+            }
+        }
+    }
+    // ③ 数字 → 中文读法
+    NSInteger num = 0;
+    {
+        NSMutableString *s = [NSMutableString string];
+        NSUInteger i = 0, n = out.length;
+        while (i < n) {
+            unichar c = [out characterAtIndex:i];
+            if (c >= '0' && c <= '9') {
+                NSUInteger j = i;
+                while (j < n) {
+                    unichar cj = [out characterAtIndex:j];
+                    if (cj >= '0' && cj <= '9') j++; else break;
+                }
+                [s appendString:MVNumberToChinese([out substringWithRange:NSMakeRange(i, j - i)])];
+                num++;
+                i = j;
+                continue;
+            }
+            [s appendFormat:@"%C", c];
+            i++;
+        }
+        [out setString:s];
+    }
+    // ④ 半角标点 → 全角（中文语境更稳；数字此时已转中文，不会误伤小数点）
+    {
+        NSArray *pairs = @[@[@"!", @"！"], @[@"?", @"？"], @[@",", @"，"], @[@";", @"；"], @[@":", @"："]];
+        for (NSArray *p in pairs)
+            [out replaceOccurrencesOfString:p[0] withString:p[1]
+                                    options:0 range:NSMakeRange(0, out.length)];
+    }
+    // ⑤ 连续重复标点压缩（。。。→ 。）
+    NSInteger rep = 0;
+    {
+        NSMutableString *s = [NSMutableString string];
+        unichar prev = 0;
+        for (NSUInteger i = 0; i < out.length; i++) {
+            unichar c = [out characterAtIndex:i];
+            if (c == prev && MVIsPunctChar(c)) { rep++; continue; }
+            [s appendFormat:@"%C", c];
+            prev = c;
+        }
+        [out setString:s];
+    }
+    // ⑥ 句末补标点（没标点的长句会被 TTS 读成"一口气念完"）
+    BOOL addedEnd = NO;
+    {
+        unichar last = [out length] ? [out characterAtIndex:out.length - 1] : 0;
+        if (last && !MVIsPunctChar(last)) { [out appendString:@"。"]; addedEnd = YES; }
+    }
+    // ⑦ 长句断句：连续 24 字没有标点，就在最近的虚词后插逗号
+    NSInteger cuts = 0;
+    {
+        NSString *soft = @"的了是在就都也和给把被要会很还然后又而所以但是";
+        NSMutableString *s = [NSMutableString string];
+        NSUInteger run = 0;
+        for (NSUInteger i = 0; i < out.length; i++) {
+            unichar c = [out characterAtIndex:i];
+            [s appendFormat:@"%C", c];
+            if (MVIsPunctChar(c)) { run = 0; continue; }
+            run++;
+            if (run >= 24) {
+                NSString *ch = [NSString stringWithFormat:@"%C", c];
+                if ([soft rangeOfString:ch].location != NSNotFound) {
+                    [s appendString:@"，"];
+                    run = 0;
+                    cuts++;
+                }
+            }
+        }
+        [out setString:s];
+    }
+    if (notes) {
+        if (num)      [notes addObject:[NSString stringWithFormat:@"数字转读法 %ld 处", (long)num]];
+        if (pct)      [notes addObject:[NSString stringWithFormat:@"百分号转读法 %ld 处", (long)pct]];
+        if (sym)      [notes addObject:[NSString stringWithFormat:@"符号转读法 %ld 处", (long)sym]];
+        if (rep)      [notes addObject:[NSString stringWithFormat:@"压缩重复标点 %ld 处", (long)rep]];
+        if (addedEnd) [notes addObject:@"补句末标点"];
+        if (cuts)     [notes addObject:[NSString stringWithFormat:@"长句断句 %ld 处", (long)cuts]];
+    }
+    return out;
+}
+
 // 千问预置音色（精选常用项；完整 48 个见
 // https://help.aliyun.com/zh/model-studio/qwen-tts-voice-list ，
 // 面板选不到的可在 设置→我的语音→千问音色 里直接填英文 voice 名，如 Dylan）

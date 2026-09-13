@@ -1,8 +1,8 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 2.8.4
+Version: 2.8.5
 Architecture: iphoneos-arm64
-Description: 节约时间，打字即可。修复录音停止无响应 + 文件选取权限 + 界面颜色可读性；优化音色选择，一屏显示更多音色；★ 修复声音复刻不生效（克隆后自动切换到克隆音色 + 统一复刻/合成模型）。
+Description: 节约时间，打字即可。修复录音停止 + 文件权限 + 界面可读性；音色选择一屏更多；★ 克隆音色补齐语速/音高/指令参数（旧版全用默认朗读腔=AI 味重），新增「人情味/标准腔/慢语速/亲切/活泼」一键风格与音高调节；输入框新增「一键纠偏」（数字读法、标点、长句断句）。
 Maintainer: yzdmm2024
 Author: yzdmm2024
 Section: Tweaks
