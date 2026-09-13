@@ -231,6 +231,10 @@ static id gAS = nil;      // AudioSender
 #pragma mark - 可用性 / 诊断
 
 + (BOOL)available {
+    // ★ 2.5.0：QQ 的录音/发送管线完全不同（NTAIOPttRecordOperator 等），
+    //   微信的 RecordController 探测在 QQ 里必然失败，直接快速回退手动按住。
+    NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
+    if ([bid rangeOfString:@"tencent.mqq"].location != NSNotFound) return NO;
     if ([NSThread isMainThread]) return ([self recordController] != nil || [self audioSender] != nil);
     __block BOOL ok = NO;
     dispatch_sync(dispatch_get_main_queue(), ^{

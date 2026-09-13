@@ -31,6 +31,7 @@ typedef struct {
     double                  rate;
     UInt32                  ch;
     // ★ 2.5.0 每队列独立喂入状态
+    UInt32                  bpf;         // 申报的 mBytesPerFrame（判真实样本布局：2=单声道S16，4=双声道交织）
     BOOL                    inSession;   // 属于本次发送的喂入集合
     NSData                 *res;         // 按本队列采样率重采样后的副本
     double                  resRate;
@@ -183,15 +184,28 @@ static void MV_AQInputTrampoline(void *inUserData, AudioQueueRef inAQ,
                         }
                         g_mvLastNs = nowNs2;
 
-                        // 整块填满：块内不留间隙（杂音根因就是间隙）
-                        NSUInteger take = MIN((NSUInteger)bufSz, total - e->off);
-                        memcpy(inBuffer->mAudioData, (const char*)src.bytes + e->off, take);
-                        if (take < bufSz)
-                            memset((char*)inBuffer->mAudioData + take, 0, bufSz - take);
-                        e->off += take;
+                        // ★ 2.5.0 QQ 适配：QQ 队列 ASBD 声明 ch=2 但 bytesPerFrame=2（真机实测
+                        //   回调 buffer 14336B ≈ 448ms@16k 单声道流）—— 真实布局以 bpf 为准：
+                        //   bpf=2 → 单声道 S16 流（整块直接写）；bpf=4 → 双声道交织（L/R 复制）。
+                        //   e->off 统一记「已消费的单声道字节」，与主档长度可比。
+                        UInt32 bpf = (e->bpf >= 2) ? e->bpf : 2;
+                        UInt32 ch = (bpf >= 4) ? 2 : 1;
+                        UInt32 bytesPerFrame = 2 * ch;
+                        NSUInteger frames = bufSz / bytesPerFrame;
+                        NSUInteger monoLeft = (total > e->off) ? (total - e->off) : 0;
+                        NSUInteger framesFill = MIN(frames, monoLeft / 2);
+                        const short *m = (const short *)((const char *)src.bytes + e->off);
+                        short *out = (short *)inBuffer->mAudioData;
+                        for (NSUInteger f = 0; f < framesFill; f++) {
+                            out[f * ch] = m[f];
+                            if (ch == 2) out[f * ch + 1] = m[f];
+                        }
+                        memset(out + framesFill * ch, 0, bufSz - framesFill * bytesPerFrame);
+                        e->off += framesFill * 2;
                         if (e->off >= total) {
                             e->done = YES;
-                            MVLog(@"[rec] ✅ 该队列已喂完全部 TTS（%.0fHz，%lu 字节）", rate, (unsigned long)total);
+                            MVLog(@"[rec] ✅ 该队列已喂完全部 TTS（%.0fHz %uch，%lu 字节）",
+                                  rate, ch, (unsigned long)total);
                         }
                     } else if (bufSz) {
                         memset(inBuffer->mAudioData, 0, bufSz);   // 尾部静音
@@ -214,6 +228,7 @@ static MVQueueEntry* MVRegisterQueue(AudioQueueRef aq, AudioQueueInputCallback c
     if (!cb) return NULL;
     double rate = fmt ? fmt->mSampleRate : 0;
     UInt32  ch  = fmt ? fmt->mChannelsPerFrame : 0;
+    UInt32  bpf = fmt ? fmt->mBytesPerFrame : 2;
     MVQueueEntry *ret = NULL;
     BOOL newlyBound = NO;
 
@@ -222,7 +237,7 @@ static MVQueueEntry* MVRegisterQueue(AudioQueueRef aq, AudioQueueInputCallback c
 
         for (NSInteger i = 0; i < g_mvQueueCount; i++) {
             if (g_mvQueues[i].aq == aq) {   // 同一队列重复创建（罕见）只刷新登记
-                g_mvQueues[i].cb = cb; g_mvQueues[i].rate = rate; g_mvQueues[i].ch = ch;
+                g_mvQueues[i].cb = cb; g_mvQueues[i].rate = rate; g_mvQueues[i].ch = ch; g_mvQueues[i].bpf = bpf;
                 ret = &g_mvQueues[i];
                 break;
             }
@@ -236,7 +251,7 @@ static MVQueueEntry* MVRegisterQueue(AudioQueueRef aq, AudioQueueInputCallback c
                 MVLog(@"[rec] 队列表已满，覆盖旧登记");
             }
             g_mvQueues[slot].aq = aq; g_mvQueues[slot].cb = cb;
-            g_mvQueues[slot].rate = rate; g_mvQueues[slot].ch = ch;
+            g_mvQueues[slot].rate = rate; g_mvQueues[slot].ch = ch; g_mvQueues[slot].bpf = bpf;
             ret = &g_mvQueues[slot];
         }
 

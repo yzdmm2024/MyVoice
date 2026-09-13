@@ -393,6 +393,9 @@ static BOOL MVLooksLikeObject(id o) {
                           @"MessageViewController"]) {
         if ([cn rangeOfString:k].location != NSNotFound) return YES;
     }
+    // ★ 2.5.0：QQ NT 架构的聊天页（C2CAIOChatViewController / TroopAIOChatViewController）
+    //   已被上面 ChatViewController 规则命中 —— 只用于「在不在聊天页」判定；
+    //   QQ 拿不到会话 ID 也没关系（手动按住 = 发到当前聊天，无需 wxid）。
     return NO;
 }
 
