@@ -70,7 +70,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.5.0（新增 QQ 支持：双声道录音适配；QQ 暂为手动按住发送）");
+        MVLog(@"载入 我的语音 v2.5.1（QQ 全自动直发：PttRecorderManager startRecord/stopRecord:YES）");
         MVLog(@"宿主 App：%@（版本 %@）",
               [NSBundle mainBundle].bundleIdentifier ?: @"?",
               [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");

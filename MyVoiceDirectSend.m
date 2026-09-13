@@ -14,7 +14,8 @@
 + (id)locate:(NSArray<NSString*>*)names;
 + (id)recordController;
 + (id)audioSender;
-+ (NSString*)stopWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc;
++ (NSString*)stopWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc qqMode:(BOOL)qqMode;
++ (BOOL)qqAvailable;
 + (void)cancelWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc;
 @end
 
@@ -283,15 +284,19 @@ static id gAS = nil;      // AudioSender
         return;
     }
 
-    // ★ 2.3.0：上游 wxid 缺失时最后再解析一次（用户此刻多半就在聊天页里，能拿到）。
-    //   仍失败就干净退出 —— 此时录音还没启动，不会残留半开的录音会话，更不会往
-    //   空会话里录（StartRecordingFromUsr: 传空 ToUsr 行为不可知，必须避免）。
-    if (!talker.length) talker = [MyVoiceResolver currentTalker];
-    if (!talker.length) {
-        MVLog(@"[direct] ❌ 无法确定会话 ID（wxid），放弃直发。VC 树：\n%@",
-              [MyVoiceResolver vcTreeDump]);
-        fin(NO, @"未识别到会话 ID（请停留在聊天页里再试）");
-        return;
+    // ★ 2.5.1 QQ 模式不需要 wxid（发给谁由「当前聊天页」决定，NT 架构拿不到也无妨）。
+    BOOL qqMode = [MyVoiceDirectSend qqAvailable];
+    if (!qqMode) {
+        // ★ 2.3.0：上游 wxid 缺失时最后再解析一次（用户此刻多半就在聊天页里，能拿到）。
+        //   仍失败就干净退出 —— 此时录音还没启动，不会残留半开的录音会话，更不会往
+        //   空会话里录（StartRecordingFromUsr: 传空 ToUsr 行为不可知，必须避免）。
+        if (!talker.length) talker = [MyVoiceResolver currentTalker];
+        if (!talker.length) {
+            MVLog(@"[direct] ❌ 无法确定会话 ID（wxid），放弃直发。VC 树：\n%@",
+                  [MyVoiceResolver vcTreeDump]);
+            fin(NO, @"未识别到会话 ID（请停留在聊天页里再试）");
+            return;
+        }
     }
 
     NSString *me = [MyVoiceResolver selfWxid] ?: @"";
@@ -300,7 +305,6 @@ static id gAS = nil;      // AudioSender
 
     // ---- 选启动入口：★ 2.5.1 QQ 走自己的 PttRecorderManager；微信优先 RecordController ----
     id target = nil; NSString *startSel = nil; id stopTarget = nil; BOOL stopIsSender = NO;
-    BOOL qqMode = [MyVoiceDirectSend qqAvailable];
 
     if (qqMode) {
         Class MC = NSClassFromString(@"QQChatVoicePttRecorderManager");
@@ -372,7 +376,7 @@ static id gAS = nil;      // AudioSender
             MVLog(@"[direct] %@", [MyVoiceRecorder cadenceReport]);
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kMVPostFeedWait * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
-                NSString *used = [MyVoiceDirectSend stopWith:stopTarget sender:stopIsSender fallbackRC:rc];
+                NSString *used = [MyVoiceDirectSend stopWith:stopTarget sender:stopIsSender fallbackRC:rc qqMode:qqMode];
                 MVLog(@"[direct] ✅ 已调用停止/发送：%@（微信自行完成 SILK 编码/入库/上传/气泡）", used);
                 // 收尾：2.5s 后解除装填，避免残留状态把后续真实录音注成静音
                 [MyVoiceRecorder resetAfterSend:2.5];
@@ -412,6 +416,12 @@ static id gAS = nil;      // AudioSender
 + (void)cancelWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc {
     id t = stopTarget ?: rc;
     if (!t) return;
+    // ★ QQ：stopRecord:NO = 结束但不发送
+    if ([MyVoiceDirectSend qqAvailable]) {
+        MVInvoke(t, @"stopRecord:", @[@NO]);
+        MVLog(@"[direct] 已调用 QQ stopRecord:NO（取消）");
+        return;
+    }
     for (NSString *sel in @[@"CancelRecording", @"CancelRecord", @"StopRecording", @"StopRecord"]) {
         if ([t respondsToSelector:NSSelectorFromString(sel)]) {
             MVInvoke(t, sel, nil);
