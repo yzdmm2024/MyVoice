@@ -114,7 +114,7 @@ static void MVSettingsChanged(CFNotificationCenterRef center, void *observer,
                                     options:NSStringDrawingUsesLineFragmentOrigin
                                  attributes:@{NSFontAttributeName:l.font} context:nil].size;
     CGFloat wdt = MIN(260, s.width + 24), hgt = MAX(36, s.height + 16);
-    l.frame = CGRectMake((w.bounds.size.width - wdt)/2, w.bounds.size.height - 120, wdt, hgt);
+    l.frame = CGRectMake((w.bounds.size.width - wdt)/2, w.bounds.size.height * 0.28, wdt, hgt);
     [w addSubview:l];
     [UIView animateWithDuration:0.25 animations:^{ l.alpha = 1; }];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
