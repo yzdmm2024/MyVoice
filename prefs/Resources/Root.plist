@@ -142,6 +142,27 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
+			<string>指令强化（2.8.8 起）</string>
+			<key>footerText</key>
+			<string>开关打开时，所有云端合成指令前面会加一句「务必严格按照以下指令执行」。实验反复证实：模型对"强化前缀"普遍更敏感，音色/方言/风格效果都明显更稳。默认开。要纯靠风格/方言本身指令的，可以关掉试试。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>指令强化前缀</string>
+			<key>key</key>
+			<string>reinforceInstruction</string>
+			<key>default</key>
+			<true/>
+			<key>PostNotification</key>
+			<string>com.yzdmm2024.myvoice/settings</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
 			<string>怎么创建音色（两种方式）</string>
 			<key>footerText</key>
 			<string>在微信里做（设置里没有麦克风权限）：打开微信任意聊天 → 点悬浮球 “语” → 点“音色管理”。① 文字设计：填一句描述（如“沉稳的中年男性播音员”）→ 生成音色。不需要录音、不需要 OSS，只需上面的 API Key。② 录音复刻：朗读 15~30 秒干声，需要下面的 OSS。创建后在悬浮球面板里选音色即可。</string>

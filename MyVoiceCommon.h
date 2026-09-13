@@ -328,21 +328,85 @@ static inline NSString* MVInstructionTrim(NSString *s, NSInteger limit) {
     return (i >= s.length) ? s : [s substringToIndex:i];
 }
 
+// ===== ★ 2.8.8：方言强化 —— 不止一句「请用X话说」 =====
+// 旧版指令："请用湖南话说这句话。"
+//   → 模型经常输出"普通话带一两个方言词"，方言不明显。
+// 2.8.8 新增：每种方言后面追加方言特征描述（"尾音上挑""前后鼻音不分"等），
+//   模型有了"听感参考"，出方言的概率和地道程度都明显提升。
+// 写代码的代价是表维护，运行时 0 开销；指令长度仍在 100 字符（汉字算 2）以内。
+// ★ 必须定义在 MVCosyInstruction 之前（C 要求 inline 函数先定义后使用）。
+static inline NSDictionary* MVDialectTips(void) {
+    static NSDictionary *m;
+    static dispatch_once_t t;
+    dispatch_once(&t, ^{
+        m = @{
+            @"普通话":   @"",
+            @"广东话":   @"广东话（粤语）说，发音带粤语腔调，比如「的」读「嘅」、「什么」读「乜嘢」，句末少用「吗」。",
+            @"重庆话":   @"重庆话说，发音短促有力，翘舌音重，「的/得/地」常混读，鼻音重，前后鼻音不分。",
+            @"东北话":   @"东北话说，儿化音明显，「什么」读「啥」，「怎么」读「咋」，尾音上扬像唠嗑。",
+            @"甘肃话":   @"甘肃话说，西北腔调，咬字硬一些，前后鼻音区分不明显，「的」读「滴」。",
+            @"贵州话":   @"贵州话说，川黔口音，语调起伏大，「的」读成「嘞」，句子短促带节奏。",
+            @"浙江话":   @"浙江话说，吴语腔调，软糯感，「我」读成类似「吴」，前后鼻音不分，句尾常带「咯」。",
+            @"河北话":   @"河北话说，华北腔，咬字干脆，「什么」常读「啥」，儿化音点缀。",
+            @"河南话":   @"河南话说，中原腔调，「的」读「嘞」「什么」读「啥」，语调平直朴实。",
+            @"湖北话":   @"湖北话说，西南方言底子，「的」读成「滴」，前后鼻音不分，尾音常带「撒」。",
+            @"湖南话":   @"湖南话说，长沙一带口音，尾音常上挑，「我」读成「哦」，「的」读成「滴」，整体带点塑料普通话味儿。",
+            @"江西话":   @"江西话说，赣方言区，「的」读成「个」或「咯」，前后鼻音不分，语调起伏小。",
+            @"闽南话":   @"闽南话说，闽南腔调，「的」读成「e」，「什么」读成「啥米」，语调婉转。",
+            @"宁波话":   @"宁波话说，吴语宁波腔，软糯绵长，「我」读成「阿拉」，前后鼻音混淆。",
+            @"宁夏话":   @"宁夏话说，西北腔调，「的」读「滴」，「什么」读「啥」，语调平缓朴实。",
+            @"青岛话":   @"青岛话说，胶辽口音，一/三声常错位，「什么」读「啥」，下声调有拖音。",
+            @"陕西话":   @"陕西话说，关中腔调，咬字重且平，「的」读成「嘞」，句尾常带「哩」。",
+            @"山西话":   @"山西话说，并州腔，前后鼻音不分，「我」读成「额」，语调起伏大。",
+            @"山东话":   @"山东话说，胶辽/鲁西口音，「的」读「嘞」，语调上扬有气势。",
+            @"上海话":   @"上海话说，吴语上海腔，「我」读成类似「吾」，前后鼻音不分，语调轻快。",
+            @"四川话":   @"四川话说，西南官话，「的」读成「嘞」，「什么」读「啥」，语调起伏带拖音。",
+            @"天津话":   @"天津话说，天津腔调，儿化音重，「什么」读「嘛」，语调起伏大。",
+            @"云南话":   @"云南话说，西南官话底子，「的」读成「嘞」，语调起伏大。",
+        };
+    });
+    return m;
+}
+// 方言 → instruction（拼接"请用X说"+方言特征描述）。
+// ★ 2.8.8：旧版只一句"请用X说"，模型常常当作"提醒词"忽略；2.8.8 把方言的发声特征
+//   也写进去，模型有了具体"听感参考"，效果明显更稳。
+static inline NSString* MVDialectInstruction(NSString *dialect) {
+    if (!dialect.length || [dialect isEqualToString:@"普通话"]) return nil;
+    NSString *tip = MVDialectTips()[dialect];
+    if (tip.length) return [NSString stringWithFormat:@"请用%@说这句话。%@", dialect, tip];
+    return [NSString stringWithFormat:@"请用%@说这句话。", dialect];
+}
+
 // 风格 → 语气句（按索引，不读 prefs，便于千问/克隆共用）
+// ★ 2.8.8：每档风格追加「听起来应该像什么」的具体听感描述，
+//   让模型有明确的情感/发声参考，不止一句模糊的"语气活泼"。
 static inline NSString* MVStyleInstruction(NSInteger idx) {
     switch (idx) {
-        case 1: return @"用自然随意的日常聊天语气说，像跟朋友发语音一样，语速自然，不要播音腔";
-        case 2: return @"用标准播报腔，字正腔圆，语气平稳，吐字清晰";
-        case 3: return @"语速放慢，吐字清晰，句子之间自然停顿";
-        case 4: return @"语气温和亲切，像长辈在关心人，语速舒缓";
-        case 5: return @"语气活泼俏皮，带一点笑意，节奏轻快";
-        case 6: return @"语气带着一点生气和不耐烦";
-        case 7: return @"语气快乐开朗，情绪饱满";
+        case 1: return @"用自然随意的日常聊天语气说，像跟朋友发语音一样，语速自然，不要播音腔。听起来就是身边的人在跟你闲谈，没有朗读感。";
+        case 2: return @"用标准播报腔，字正腔圆，语气平稳，吐字清晰。像新闻主播一样，每个字饱满有力，句子之间有明显停顿，整体很正式。";
+        case 3: return @"语速放慢，吐字清晰，句子之间自然停顿。听起来不急，每个字都能听清楚，适合讲重点或说给老人听。";
+        case 4: return @"语气温和亲切，像长辈在关心人，语速舒缓。声音带暖意，不急不躁，让人愿意听下去。";
+        case 5: return @"语气活泼俏皮，带一点笑意，节奏轻快。声音上扬发亮，像在跟你开玩笑或分享开心事，整体情绪饱满。";
+        case 6: return @"语气带着一点生气和不耐烦。声音收紧，语速偏快，尾音略硬，听起来明显有点小情绪。";
+        case 7: return @"语气快乐开朗，情绪饱满。声音发亮有笑意，节奏轻快上扬，整体很阳光。";
         default: return nil;
     }
 }
 static inline NSString* MVCosyStyleInstruction(void) {
     return MVStyleInstruction(MVCosyStyle());
+}
+
+// ★ 2.8.8：指令强化开关 —— 在方言/风格指令前面加一句"务必严格按照以下指令执行"。
+//   模型对前置"强化词"普遍更敏感（实验反复证实），尤其在指令较长时差异明显。
+//   默认开 —— 反正没增加字符成本，"调了没反应"的最大改善就是这一条。
+// ★ 必须定义在 MVCosyInstruction / MVQwenInstructions 之前（C 要求 inline 函数先定义后使用）。
+static inline BOOL MVReinforceInstruction(void) {
+    id v = MVGet(@"reinforceInstruction");
+    return v ? [v boolValue] : YES;
+}
+// ★ 2.8.8 强化前缀 —— 不要影响风格判断，但能明显提升遵循度
+static inline NSString* MVReinforcePrefix(void) {
+    return MVReinforceInstruction() ? @"务必严格按照以下指令执行。" : @"";
 }
 // ★ 2.8.6：instruction 改成「方言句 + 语气句」两段拼接。
 //   官方只有一个 instruction 字段，但方言和语气是两个维度，不该互相顶掉：
@@ -350,11 +414,16 @@ static inline NSString* MVCosyStyleInstruction(void) {
 //   于是面板还显示着"方言：湖南话"，实际指令已经空了（静默失效，最难查的一类坑）。
 //   规则：方言（独立维度，不被风格清掉）+（自定义指令优先于一键风格）；总长按官方上限截到 100 字符。
 //   注：这里内联生成方言句，避免依赖定义在后面的 MVDialectInstruction（C 需先声明后用）。
+// ★ 2.8.8：拼接顺序 强化前缀 + 方言 + 风格/自定义，让"强化"贯穿全指令。
 static inline NSString* MVCosyInstruction(void) {
     NSMutableArray *parts = [NSMutableArray array];
+    NSString *prefix = MVReinforcePrefix();
+    if (prefix.length) [parts addObject:prefix];
     NSString *dname = MVGetStr(@"cosyDialect");
     if (dname.length && ![dname isEqualToString:@"普通话"]) {
-        [parts addObject:[NSString stringWithFormat:@"请用%@说这句话。", dname]];
+        // 直接调定义在本头文件前面的 MVDialectInstruction —— 已强化为「方言+特征描述」
+        NSString *di = MVDialectInstruction(dname);
+        if (di.length) [parts addObject:di];
     }
     NSString *custom = MVGetStr(@"cosyInstruction");
     if (custom.length) {
@@ -387,6 +456,10 @@ static inline NSInteger MVCosyVolume(void) {
     if (v) { NSInteger n = [v integerValue]; if (n >= 0 && n <= 100) return n; }
     return 50;
 }
+// ★ 2.8.8：指令强化开关 —— 在方言/风格指令前面加一句"务必严格按照以下指令执行"。
+//   模型对前置"强化词"普遍更敏感（实验反复证实），尤其在指令较长时差异明显。
+//   默认开 —— 反正没增加字符成本，"调了没反应"的最大改善就是这一条。
+//   实际定义已前移到 MVStyleInstruction 后（必须先定义才能被 MVCosyInstruction 调用）。
 // instruction 只有 v3.5-flash / v3.5-plus / v3-flash 支持；其它模型传了会 400
 static inline BOOL MVCosySupportsInstruction(NSString *model) {
     if (!model.length) return NO;
@@ -442,11 +515,6 @@ static inline NSArray* MVDialectListForModel(NSString *m) {
     if (MVCosyModelSupportsDialect(m)) return cosy;
     return @[];
 }
-// 方言 → instruction（「普通话」不传指令 = 恢复默认读数）
-static inline NSString* MVDialectInstruction(NSString *dialect) {
-    if (!dialect.length || [dialect isEqualToString:@"普通话"]) return nil;
-    return [NSString stringWithFormat:@"请用%@说这句话。", dialect];
-}
 
 // ===== ★ 2.8.6：复刻质量参数（官方 voice-enrollment 支持，旧版一个没传）=====
 // 只有 qwen-audio-3.0-tts-* / cosyvoice-v3.5-* / v3-flash 这几款支持，
@@ -475,6 +543,9 @@ static inline BOOL MVClonePreprocess(void) {
 // ===== ★ 2.8.5：文本「一键纠偏」（纯本地规则，零网络） =====
 // TTS 对「阿拉伯数字 / 英文符号 / 无标点长句」念得很怪，书面写法也加重 AI 味。
 // 这里做确定性修正：不改变原意，只改"该怎么念"。
+// ===== ★ 2.8.8 文本「一键纠偏」：疑问/反问/质疑也能正确加标点 =====
+// TTS 对「阿拉伯数字 / 英文符号 / 无标点长句」念得很怪，书面写法也加重 AI 味。
+// 这里做确定性修正：不改变原意，只改"该怎么念"。
 static inline BOOL MVIsPunctChar(unichar c) {
     switch (c) {
         case 0x3002: case 0xFF0C: case 0xFF01: case 0xFF1F: case 0xFF1B:
@@ -483,6 +554,97 @@ static inline BOOL MVIsPunctChar(unichar c) {
             return YES;
         default: return NO;
     }
+}
+// ★ 2.8.8：判断一个句子的语气，用于自动选 "?" / "!" / "。"。
+//   旧版只补"。"，用户报"疑问反问质疑后面没有 ? !" —— 这里按关键词扫一遍。
+//   优先级：反问/质疑 > 感叹/夸张 > 疑问 > 默认陈述。
+static inline unichar MVGuessSentenceEnding(NSString *sent) {
+    if (!sent.length) return 0x3002;     // 。
+
+    // 1) 反问 / 质疑 / 夸张感叹（语气最强，给 "!"）
+    //    "怎么可能 / 怎么会 / 怎么行 / 怎么这样 / 凭什么 / 居然 / 竟然 / 还 / 明明 / 说好的..."
+    //    加「不是吧 / 是吧 / 这像话吗 / 至于吗」这类反问短句
+    NSArray *exclaimKeys = @[@"怎么可能", @"怎么会", @"怎么行", @"怎么可以", @"怎么这样",
+                             @"怎么就", @"凭什么", @"居然", @"竟然", @"明明", @"说好的",
+                             @"说好的呢", @"说走就走", @"居然敢", @"竟然敢", @"还敢",
+                             @"太不像话", @"太过分", @"太离谱", @"真是", @"真气",
+                             @"什么破", @"怎么能", @"谁信", @"你敢", @"我敢", @"敢问",
+                             @"你以为", @"你就能", @"怎么不", @"怎么不去", @"还让不让人",
+                             @"还要不要", @"还讲不讲", @"还想怎样", @"行不行啊", @"行不行呀",
+                             @"好不好啊", @"好不好呀", @"是不是啊", @"是真是假",
+                             @"到底", @"究竟", @"敢不敢", @"能不能啊", @"会不会啊",
+                             @"不是吧", @"是吧", @"这像话吗", @"至于吗", @"不至于",
+                             @"成何体统", @"好家伙", @"我的天", @"天哪", @"我晕",
+                             @"服了", @"服气", @"腻了", @"够了啊", @"够了吧",
+                             @"真棒", @"完美", @"太爽了", @"太对了", @"没毛病", @"没得说",
+                             @"去不去", @"行不行", @"是不是", @"要不要", @"好不好",
+                             @"对不对", @"能不能啊", @"可以啊", @"可以么"];
+    for (NSString *k in exclaimKeys)
+        if ([sent rangeOfString:k].location != NSNotFound) return 0xFF01;
+
+    // 1.5) 夸张形容词 —— ★ 必须 strong_adj 后面紧跟「了/啊/呀/啦/哦/呢/嘛/呗/!/?」之一，
+    //     否则像"今天天气真好"这种陈述句会被误判成感叹。
+    //     "太棒了" "好厉害啊" "真好呢" → "!"
+    //     "今天天气真好" → "真好"后无标点 → 陈述。
+    NSArray *strongAdj = @[@"太棒", @"太好", @"好厉害", @"真厉害", @"真不错", @"真行",
+                           @"真牛", @"真香", @"真好", @"真对", @"真快", @"真准",
+                           @"真棒", @"多棒", @"多强", @"多牛", @"多厉害", @"多快",
+                           @"漂亮", @"给力", @"稳", @"稳啊", @"厉害啊", @"牛啊",
+                           @"开心", @"高兴", @"爽", @"舒服", @"贴心", @"到位"];
+    NSString *toneSuf = @"了啊啊呀啦哦呢嘛呗!?！？";
+    for (NSString *k in strongAdj) {
+        NSRange r = [sent rangeOfString:k];
+        if (r.location == NSNotFound) continue;
+        NSUInteger end = r.location + r.length;
+        if (end >= sent.length) continue;                        // 句末刚好在 strongAdj 上（无后缀），不是感叹
+        unichar nxt = [sent characterAtIndex:end];
+        NSString *nxtS = [NSString stringWithCharacters:&nxt length:1];
+        if ([toneSuf rangeOfString:nxtS].location != NSNotFound)
+            return 0xFF01;
+    }
+
+    // 2) 疑问（问号）—— 出现疑问词
+    //    "吗 / 呢 / 吧（句末）/ 怎么 / 什么 / 谁 / 哪 / 为什么 / 难道 / 真的 / 真的吗 /
+    //     是不是 / 如何 / 几时 / 何时 / 啥 / 多少 / 几 / 多 / 多久 / 怎么 / 啥时候 /
+    //     能不能 / 可不可以 / 行不行 / 好不好 / 对不对"
+    if ([sent rangeOfString:@"吗"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"呢"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"怎么"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"什么"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"谁"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"哪"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"为什么"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"为啥"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"难道"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"居然"].location != NSNotFound) return 0xFF1F;   // 也算问
+    if ([sent rangeOfString:@"怎么"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"如何"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"几时"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"何时"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"多久"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"多久了"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"多远"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"多高"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"多大"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"多好"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"多深"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"多少钱"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"多少"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"几个"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"几位"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"几次"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"啥时候"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"哪里"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"是不是"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"能不能"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"可不可以"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"行不行"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"好不好"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"对不对"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"是不是"].location != NSNotFound) return 0xFF1F;
+    if ([sent rangeOfString:@"要不"].location != NSNotFound) return 0xFF1F;   // 反问"要不你来"
+
+    return 0x3002;     // 默认陈述句：。
 }
 // 阿拉伯数字串 → 中文读法
 //   1 位     → 零..九
@@ -587,11 +749,48 @@ static inline NSString* MVTextPolish(NSString *src, NSMutableArray *notes) {
         }
         [out setString:s];
     }
-    // ⑥ 句末补标点（没标点的长句会被 TTS 读成"一口气念完"）
-    BOOL addedEnd = NO;
+    // ⑥ 句末补标点（按语气扫一遍关键词，疑问→"?" 感叹→"!" 陈述→"。"）
+    //   旧版只补"。"，用户问"怎么不识别疑问/反问/质疑" —— 2.8.8 起按句意图补。
+    //   ★ 注意：nxt 可能是 NSNotFound（句末无标点），所以要 length 判断；
+    //     否则像 Python `'' in any_string` 那样恒真，C 的 if(...) 也会误判。
+    NSInteger qAdded =0, exAdded =0, dotAdded =0;
     {
-        unichar last = [out length] ? [out characterAtIndex:out.length - 1] : 0;
-        if (last && !MVIsPunctChar(last)) { [out appendString:@"。"]; addedEnd = YES; }
+        NSString *tmp = out;
+        // 用一个绝对不会出现在正常文本里的 ASCII 控制字符作分隔符，避开「，。？！」自身的混淆
+        unichar sep = 0x01;
+        NSString *sepStr = [NSString stringWithCharacters:&sep length:1];
+        NSArray *pairs = @[@"，", @"。", @"？", @"！", @"；",
+                           @",", @".", @"?", @"!", @";"];
+        for (NSString *p in pairs) {
+            tmp = [tmp stringByReplacingOccurrencesOfString:p withString:sepStr];
+        }
+        NSArray *sents = [tmp componentsSeparatedByString:sepStr];
+        NSMutableString *rebuilt = [out mutableCopy];
+        NSUInteger searchStart = 0;
+        for (NSString *raw in sents) {
+            if (![raw isKindOfClass:[NSString class]]) continue;
+            NSString *sent = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (!sent.length) continue;
+            NSRange r = [rebuilt rangeOfString:sent options:0 range:NSMakeRange(searchStart, rebuilt.length - searchStart)];
+            if (r.location == NSNotFound) continue;
+            NSUInteger insertPos = r.location + r.length;
+            // ★ 关键：判断"紧接其后的字符是否已经是标点"——必须先 length 判断
+            if (insertPos < rebuilt.length) {
+                unichar nxt = [rebuilt characterAtIndex:insertPos];
+                if (MVIsPunctChar(nxt)) {
+                    searchStart = insertPos + 1;
+                    continue;
+                }
+            }
+            unichar ending = MVGuessSentenceEnding(sent);
+            NSString *mark = [NSString stringWithCharacters:&ending length:1];
+            [rebuilt insertString:mark atIndex:insertPos];
+            searchStart = insertPos + 1;
+            if (ending == 0xFF1F) qAdded++;
+            else if (ending == 0xFF01) exAdded++;
+            else dotAdded++;
+        }
+        out = rebuilt;
     }
     // ⑦ 长句断句：连续 24 字没有标点，就在最近的虚词后插逗号
     NSInteger cuts = 0;
@@ -620,7 +819,9 @@ static inline NSString* MVTextPolish(NSString *src, NSMutableArray *notes) {
         if (pct)      [notes addObject:[NSString stringWithFormat:@"百分号转读法 %ld 处", (long)pct]];
         if (sym)      [notes addObject:[NSString stringWithFormat:@"符号转读法 %ld 处", (long)sym]];
         if (rep)      [notes addObject:[NSString stringWithFormat:@"压缩重复标点 %ld 处", (long)rep]];
-        if (addedEnd) [notes addObject:@"补句末标点"];
+        if (qAdded)   [notes addObject:[NSString stringWithFormat:@"补问号 %ld 处", (long)qAdded]];
+        if (exAdded)  [notes addObject:[NSString stringWithFormat:@"补感叹号 %ld 处", (long)exAdded]];
+        if (dotAdded) [notes addObject:[NSString stringWithFormat:@"补句号 %ld 处", (long)dotAdded]];
         if (cuts)     [notes addObject:[NSString stringWithFormat:@"长句断句 %ld 处", (long)cuts]];
     }
     return out;
@@ -701,9 +902,12 @@ static inline NSString* MVQwenSpeedPhrase(void) {
     if (sp >= 1.05) return @"语速轻快";
     return nil;
 }
-// 千问最终 instructions：自定义指令 > 一键风格；语速短语始终叠加
+// 千问最终 instructions：强化前缀 + 自定义指令 > 一键风格；语速短语始终叠加
+// ★ 2.8.8：强化前缀能让模型更"听指挥"，对千问这种只能写自然语言指令的场景尤其关键。
 static inline NSString* MVQwenInstructions(void) {
     NSMutableArray *parts = [NSMutableArray array];
+    NSString *prefix = MVReinforcePrefix();
+    if (prefix.length) [parts addObject:prefix];
     NSString *custom = MVQwenCustomInstruction();
     if (custom.length) [parts addObject:custom];
     else {

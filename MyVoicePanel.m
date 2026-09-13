@@ -9,7 +9,7 @@
 #import <AVFoundation/AVFoundation.h>   // ★ 2.8.7：列表内试听要播 PCM(WAV)
 
 #define MV_PANEL_W 320.0
-#define MV_PANEL_H 400.0   // ★ 2.8.7：360 → 400（音色页多了风格/模型/预设三行，还要给列表腾高度）
+#define MV_PANEL_H 410.0   // ★ 2.8.8：400 → 410（让 voiceTable 多露一行；标题/行高都缩了）
 #define MV_FAB_SIZE 38.0
 
 // ★ 2.8.7：带「试听」按钮的音色单元。
@@ -859,8 +859,9 @@
     self.voiceTable.backgroundColor = [UIColor clearColor];
     self.voiceTable.dataSource = self;
     self.voiceTable.delegate = self;
-    self.voiceTable.rowHeight = 34;
+    self.voiceTable.rowHeight = 30;   // ★ 2.8.8：34 → 30（与 heightForRowAtIndexPath 保持一致）
     self.voiceTable.layer.cornerRadius = 12;
+    // ★ 2.8.8：标题行与 cell 之间用细横线隔，单元行用全宽横线
     self.voiceTable.separatorInset = UIEdgeInsetsMake(0, 12, 0, 12);
     [self.pickerView addSubview:self.voiceTable];
 
@@ -931,7 +932,7 @@
     [self updateDialectButtons];
 
     self.sectionLabel.frame = CGRectMake(14, y, W - 28, 14);
-    y += 16;
+    y += 14;     // ★ 2.8.8：16 → 14（让 sectionLabel 紧贴 voiceTable）
     self.voiceTable.frame = CGRectMake(12, y, W - 24, H - y - 8);
 }
 
@@ -1074,9 +1075,11 @@
 - (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section {
     return (NSInteger)self.voiceRows.count;
 }
+// ★ 2.8.8：标题行压扁 + cell 行高缩 30，让 picker 排版更紧凑。
+//   用户反馈：分节标题行与音色单元行之间空白过大。
 - (CGFloat)tableView:(UITableView*)tableView heightForRowAtIndexPath:(NSIndexPath*)ip {
     NSDictionary *r = [self voiceRowAt:ip];
-    return r[@"__title"] ? 24.0 : 34.0;             // 标题行矮一点，多让出一行
+    return r[@"__title"] ? 20.0 : 30.0;             // 标题行 20，cell 30（原 24/34 → 缩 ~12%）
 }
 - (UITableViewCell*)tableView:(UITableView*)tableView cellForRowAtIndexPath:(NSIndexPath*)indexPath {
     NSDictionary *row = [self voiceRowAt:indexPath];
@@ -1088,8 +1091,10 @@
             c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:tid];
             c.selectionStyle = UITableViewCellSelectionStyleNone;
             c.backgroundColor = [UIColor clearColor];
+            // ★ 2.8.8：标题行字号、颜色都加重，视觉上"压"在下面 cell 上；
+            //   原 24 → 20（高度），原 0.42 透明度 → 0.55，更明显的"开始一节"感。
             c.textLabel.font = [UIFont boldSystemFontOfSize:11];
-            c.textLabel.textColor = [UIColor colorWithWhite:0 alpha:0.42];
+            c.textLabel.textColor = [UIColor colorWithWhite:0 alpha:0.55];
         }
         c.textLabel.text = row[@"__title"];
         return c;
