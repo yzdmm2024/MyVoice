@@ -1,8 +1,8 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 2.8.8
+Version: 2.8.9
 Architecture: iphoneos-arm64
-Description: 节约时间，打字即可。★ 2.8.8 真改善「调了没反应」：方言指令追加方言特征描述（尾音/前后鼻音/典型词），让模型有听感参考；一键风格追加发声描述（情绪、节奏、声线参考）；指令前加「务必严格按照以下指令执行」强化前缀（可关）。一键纠偏按语气补标点：疑问→?、反问/质疑/夸张→!、陈述→。面板排版紧凑：分节标题行 24→20、单元行 34→30、整体高度 400→410，让音色列表多露一行。
+Description: 节约时间，打字即可。★ 2.8.9 「从文件选取音频」新增 .aud 格式支持：自动识别微信/QQ 语音的 AMR 封装（#!AMR 头）并就地转成 m4a 后再克隆；SILK 封装（#!SILK 头）iOS 无解码器，给出 ffmpeg/格式工厂转码提示，不再无声失败。
 Maintainer: yzdmm2024
 Author: yzdmm2024
 Section: Tweaks

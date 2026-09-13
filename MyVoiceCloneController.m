@@ -95,7 +95,7 @@
 
     // ---- 模式 1：上传音频复刻（★ 2.4.2）----
     self.pickBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.pickBtn setTitle:@"从文件选取音频（wav / mp3 / m4a…）" forState:UIControlStateNormal];
+    [self.pickBtn setTitle:@"从文件选取音频（wav / mp3 / m4a / aud…）" forState:UIControlStateNormal];
     self.pickBtn.backgroundColor = [UIColor systemBlueColor];
     [self.pickBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     self.pickBtn.frame = CGRectMake(20, 290, W-40, 48);
@@ -230,14 +230,85 @@
     // ★ 修复：安全作用域资源必须先 startAccessing 才能读取
     [src startAccessingSecurityScopedResource];
     NSString *ext = src.pathExtension.length ? src.pathExtension.lowercaseString : @"wav";
+    // ★ 2.8.9：.aud 支持。微信/QQ 导出的 .aud 通常是 AMR（#!AMR 头）或 SILK（#!SILK 头）封装，
+    //   直接拿去上传服务端不认、AVFoundation 也嗅探不出容器 —— 先看魔数再决定走哪条路。
+    if ([ext isEqualToString:@"aud"] || [ext isEqualToString:@"amr"]) {
+        NSData *head = [NSData dataWithContentsOfFile:src.path options:NSDataReadingMappedIfSafe error:nil];
+        NSString *magic = head ? [[NSString alloc] initWithData:
+                                [head subdataWithRange:NSMakeRange(0, MIN(16, head.length))]
+                                              encoding:NSUTF8StringEncoding] : nil;
+        if ([magic hasPrefix:@"#!SILK"]) {
+            // SILK 是腾讯私有语音流，iOS 无系统解码器，本地转不了，明确告知怎么办
+            [src stopAccessingSecurityScopedResource];
+            self.uploadPath = nil;
+            self.uploadName = src.lastPathComponent;
+            self.pickedLabel.text = [NSString stringWithFormat:@"已选择：%@", self.uploadName];
+            self.statusLabel.text = @"❌ 这是 SILK 封装的 .aud（微信/QQ 原始语音流），iOS 没有系统解码器，本机转不了。\n"
+                                     @"请先用电脑转成 mp3/wav 再选：\n"
+                                     @"ffmpeg -i 文件.aud 文件.mp3  （或用格式工厂）";
+            return;
+        }
+        if ([magic hasPrefix:@"#!AMR"]) ext = @"amr";   // 强制按 amr 落盘，帮 AVFoundation 认容器
+    }
     NSString *dst = [NSTemporaryDirectory() stringByAppendingPathComponent:
                      [NSString stringWithFormat:@"mv_upload_%@.%@", [[NSUUID UUID] UUIDString], ext]];
     NSError *e = nil;
     [[NSFileManager defaultManager] copyItemAtURL:src toURL:[NSURL fileURLWithPath:dst] error:&e];
     [src stopAccessingSecurityScopedResource];
     if (e) { self.statusLabel.text = [@"读取文件失败：" stringByAppendingString:e.localizedDescription]; return; }
+
+    if ([ext isEqualToString:@"amr"]) {
+        // ★ 2.8.9：AMR（含 .aud 改名来的）iOS 能解 AMR-NB —— 就地转 m4a 再走克隆链路
+        [self transcodeToM4a:dst originalName:src.lastPathComponent];
+        return;
+    }
+    [self finalizePickedPath:dst name:src.lastPathComponent];
+}
+
+// ★ 2.8.9：AMR/.aud → m4a。AVAssetExportSession 转码完成后接原有的时长校验逻辑。
+- (void)transcodeToM4a:(NSString*)amrPath originalName:(NSString*)name {
+    self.uploadPath = nil;
+    self.uploadName = name;
+    self.pickedLabel.text = [NSString stringWithFormat:@"已选择：%@", name];
+    self.statusLabel.text = @"正在把 .aud（AMR）转成 m4a…";
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:amrPath] options:nil];
+    AVAssetExportSession *ex = [AVAssetExportSession exportSessionWithAsset:asset
+                                                                 presetName:AVAssetExportPresetAppleM4A];
+    if (!ex) { [self audConvertFailed]; return; }
+    ex.outputFileType = AVFileTypeAppleM4A;
+    // export 不会覆盖已存在文件，先删占位
+    NSString *out = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                     [NSString stringWithFormat:@"mv_aud_%@.m4a", [[NSUUID UUID] UUIDString]]];
+    [[NSFileManager defaultManager] removeItemAtPath:out error:nil];
+    ex.outputURL = [NSURL fileURLWithPath:out];
+    __weak typeof(self) ws = self;
+    [ex exportAsynchronouslyWithCompletionHandler:^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(ws) self = ws;
+            if (!self) return;
+            if (ex.status == AVAssetExportSessionStatusCompleted) {
+                NSString *shown = name.pathExtension.length ? [name stringByDeletingPathExtension] : name;
+                self.statusLabel.text = @"";
+                [self finalizePickedPath:out name:[shown stringByAppendingPathExtension:@"m4a"]];
+            } else {
+                MVLog(@"[aud] 转码失败 status=%ld err=%@", (long)ex.status, ex.error);
+                [self audConvertFailed];
+            }
+        });
+    }];
+}
+
+- (void)audConvertFailed {
+    self.uploadPath = nil;
+    self.statusLabel.text = @"❌ .aud（AMR）转换失败：iOS 解不出这段音频（可能是 AMR-WB / 已损坏）。\n"
+                            @"请先用电脑转成 mp3/wav 再选：\n"
+                            @"ffmpeg -i 文件.aud 文件.mp3  （或用格式工厂）";
+}
+
+// ★ 2.8.9：从 documentPicker 拆出来的收尾逻辑（时长校验），供普通音频与 aud 转码两条路共用
+- (void)finalizePickedPath:(NSString*)dst name:(NSString*)name {
     self.uploadPath = dst;
-    self.uploadName = src.lastPathComponent;
+    self.uploadName = name;
     // 显示文件名与时长（读不出时长就只显示文件名）
     AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:dst] options:nil];
     // ★ 2.8.6：参考音频时长校验。官方 voice-enrollment 的 max_prompt_audio_length
