@@ -235,16 +235,10 @@ static id gAS = nil;      // AudioSender
 #pragma mark - 可用性 / 诊断
 
 + (BOOL)qqAvailable {
-    // ★ 2.5.1/2.5.2：QQ 直发——复用聊天页自己的 QQChatVoicePttRecorderManager 实例。
-    //   frida 实测：自己 alloc.init 的裸实例没有 delegate，startRecord/stopRecord:YES
-    //   走完了录音但 QQ 不发送；只有聊天输入栏创建、delegate 已接线的实例才真正发送。
-    //   实例「按住才创建、松手即销毁」→ hook +alloc 扣住最新实例（强引用），
-    //   天然跟随用户最后按住的聊天。
-    NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
-    BOOL isQQ = ([bid rangeOfString:@"tencent.mqq"].location != NSNotFound &&
-                 NSClassFromString(@"QQChatVoicePttRecorderManager") != nil);
-    if (isQQ) [self installQQMgrHook];
-    return isQQ;
+    // ★ 2.5.5：QQ 自动直发暂缓。录音管理器经 Swift objc_alloc 快路径创建
+    //   （+alloc/-startRecord 钩子均无效），发送交付链也未定位，程序化直发不可靠。
+    //   QQ 统一回退【手动按住发送】——录音劫持本身已真机验证可用（TTS 完整喂入）。
+    return NO;
 }
 
 // ---- QQ 管理器扣留（★ 2.5.4 hook manager 自己的录音回调）----
