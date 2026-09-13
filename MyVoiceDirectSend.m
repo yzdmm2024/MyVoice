@@ -303,6 +303,35 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
 }
 
 + (id)stashedQQOperator { @synchronized([MyVoiceDirectSend class]) { return g_mvQQOperator; } }
+// ★ 2.6.3：手动按住模式的「自动松手」监视器。
+//   用户按住说话 → QQ 创建新 QQPttRecorder（createRecorder 钩子扣留）→ 队列被喂 TTS；
+//   TTS 喂完（fedDone）且已按住 ≥1.3s（防「太短」丢弃）→ 自动 stopRecord：
+//   等效于用户在 TTS 结束瞬间松手 —— 消息长度 = TTS 长度，用户无需数秒。
++ (void)beginQQAutoStopWatch {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSTimeInterval t0 = [[NSDate date] timeIntervalSince1970];
+        MVLog(@"[autoStop] 监视器启动：TTS 喂完后将自动停止并发送");
+        while (YES) {
+            @autoreleasepool {
+                if (![MyVoiceRecorder isArmed]) { MVLog(@"[autoStop] 装填已解除，监视器退出"); return; }
+                NSTimeInterval el = [[NSDate date] timeIntervalSince1970] - t0;
+                if (el > 30) { MVLog(@"[autoStop] 30s 超时退出（未满足停止条件）"); return; }
+                if ([MyVoiceRecorder fedDone] && el >= 1.3) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        id rec = [MyVoiceDirectSend stashedQQRecorder];
+                        if (rec) {
+                            MVInvoke(rec, @"stopRecord", nil);
+                            MVLog(@"[autoStop] ✅ TTS 已喂完，自动 stopRecord（消息按 TTS 长度发出）");
+                            [MyVoiceRecorder resetAfterSend:2.0];
+                        }
+                    });
+                    return;
+                }
+                usleep(100 * 1000);
+            }
+        }
+    });
+}
 + (id)stashedQQRecorder { @synchronized([MyVoiceDirectSend class]) { return g_mvQQRecorder; } }
 
 + (BOOL)available {
@@ -379,6 +408,7 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
         if (!target) {
             // ★ 2.6.2：TTS 装填保持有效 —— 用户随后手动按住说话，队列照样被喂 TTS
             MVLog(@"[direct] QQ：尚无激活的 Operator —— 保持装填，等待手动按住");
+                [MyVoiceDirectSend beginQQAutoStopWatch];
             fin(NO, @"语音已就绪：请现在按住「按住 说话」，松开即发出（2 分钟内有效）");
             return;
         }
@@ -437,6 +467,7 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
                 // ★ 2.6.2：QQ 自动触发不生效时【保留装填】—— 用户手动按住说话时
                 //   队列照样加入会话被喂 TTS，松手即发出所选音色。
                 MVLog(@"[direct] QQ 自动触发未生效 —— 保留装填，等待手动按住");
+                [MyVoiceDirectSend beginQQAutoStopWatch];
                 fin(NO, @"自动触发未生效：请手动按住「按住 说话」，松开即发出（2 分钟内有效）");
             } else {
                 MVLog(@"[direct] ❌ 1.2s 内录音未被接管，取消直发（不会残留录音）");
