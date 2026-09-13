@@ -18,6 +18,8 @@ extern void MSHookMessageEx(Class _class, SEL message, IMP hook, IMP *old);
 + (id)recordController;
 + (id)audioSender;
 + (NSString*)stopWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc qqMode:(BOOL)qqMode;
++ (id)stashedQQOperator;
++ (id)stashedQQRecorder;
 + (BOOL)qqAvailable;
 + (void)cancelWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc;
 @end
@@ -235,55 +237,73 @@ static id gAS = nil;      // AudioSender
 #pragma mark - 可用性 / 诊断
 
 + (BOOL)qqAvailable {
-    // ★ 2.5.5：QQ 自动直发暂缓。录音管理器经 Swift objc_alloc 快路径创建
-    //   （+alloc/-startRecord 钩子均无效），发送交付链也未定位，程序化直发不可靠。
-    //   QQ 统一回退【手动按住发送】——录音劫持本身已真机验证可用（TTS 完整喂入）。
+    // ★ 2.6.0：QQ 全自动直发恢复。frida spawn 全链路实锤（按住一次的完整序列）：
+    //   QQPttRecordBtn touchesBegan → NTAIOPttRecordOperator -didTriggeredRecord（开始，
+    //   由此创建 QQPttRecorder/AudioQueue=劫持点）→ touchesEnded → QQPttRecorder
+    //   -stopRecord（结束并发送）。直发 = 复用 operator 调 didTriggeredRecord 开始，
+    //   轮询 TTS 喂完后对新 QQPttRecorder 调 stopRecord。
+    NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
+    if ([bid rangeOfString:@"tencent.mqq"].location != NSNotFound &&
+        NSClassFromString(@"NTAIOChat.NTAIOPttRecordOperator") != nil) {
+        [self installQQHooks];
+        return YES;
+    }
     return NO;
 }
 
-// ---- QQ 管理器扣留（★ 2.5.4 hook manager 自己的录音回调）----
-// frida 真机追踪：按住说话的链路是 NTAIOPttRecordOperator -didTriggeredRecord →
-//   QQPttRecorder initRecorder/createRecorder → AudioQueueNewInput ——
-//   【不经过】manager 的 startRecord（2.5.3 hook 落空的原因）。
-// 但 manager 自己的委托回调（onDeviceReady:/onRecordReady:/onRecordCancel:）
-//   在按住期间必然以 self=manager 被调用 —— hook 它们扣住实例，百发百中。
-static id  g_mvQQMgr = nil;   // 最近一次按住说话的实例（强引用，跟随最后按住的聊天）
+// ---- QQ 直发扣留（★ 2.6.0：operator = 开始入口；recorder = 每次新建，结束时 stop）----
+// frida spawn 全链路实测：touchesBegan → operator didTriggeredRecord →
+//   QQPttRecorder initRecorder/createRecorder → AudioQueue；touchesEnded → stopRecord。
+static id  g_mvQQOperator = nil;   // 最近一次按住的聊天操作器（强引用，含聊天上下文）
+static id  g_mvQQRecorder = nil;   // 最近一次录音的 QQPttRecorder（每次录音新建）
+static IMP g_mvOrigQQDidTrig = NULL;
+static IMP g_mvOrigQQCreateRec = NULL;
 
-static IMP g_mvOrigQQCb1 = NULL, g_mvOrigQQCb2 = NULL, g_mvOrigQQCb3 = NULL;
-
-static void MVQQStash(id self) {
+static void MVQQOperatorDidTrigHook(id self, SEL _cmd) {
     @synchronized([MyVoiceDirectSend class]) {
-        if (g_mvQQMgr != self) {
-            if (g_mvQQMgr) CFRelease((__bridge CFTypeRef)g_mvQQMgr);
-            g_mvQQMgr = self;
+        if (g_mvQQOperator != self) {
+            if (g_mvQQOperator) CFRelease((__bridge CFTypeRef)g_mvQQOperator);
+            g_mvQQOperator = self;
             CFRetain((__bridge CFTypeRef)self);
-            MVLog(@"[direct] 已扣留聊天页 PttRecorderManager %p（当前聊天已激活）", self);
+            MVLog(@"[direct] 已扣留聊天页 PttRecordOperator %p（当前聊天已激活）", self);
         }
     }
+    ((void(*)(id, SEL))g_mvOrigQQDidTrig)(self, _cmd);
 }
 
-static void MVQQOnDeviceReadyHook(id self, SEL _cmd, id a1) { MVQQStash(self);
-    ((void(*)(id, SEL, id))g_mvOrigQQCb1)(self, _cmd, a1); }
-static void MVQQOnRecordReadyHook(id self, SEL _cmd, id a1) { MVQQStash(self);
-    ((void(*)(id, SEL, id))g_mvOrigQQCb2)(self, _cmd, a1); }
-static void MVQQOnRecordCancelHook(id self, SEL _cmd, id a1) { MVQQStash(self);
-    ((void(*)(id, SEL, id))g_mvOrigQQCb3)(self, _cmd, a1); }
+static id MVQQCreateRecorderHook(id self, SEL _cmd) {
+    id rec = ((id(*)(id, SEL))g_mvOrigQQCreateRec)(self, _cmd);
+    if (rec) {
+        @synchronized([MyVoiceDirectSend class]) {
+            if (g_mvQQRecorder != rec) {
+                if (g_mvQQRecorder) CFRelease((__bridge CFTypeRef)g_mvQQRecorder);
+                g_mvQQRecorder = rec;
+                CFRetain((__bridge CFTypeRef)rec);
+                MVLog(@"[direct] 已扣留新 QQPttRecorder %p", rec);
+            }
+        }
+    }
+    return rec;
+}
 
-+ (void)installQQMgrHook {
++ (void)installQQHooks {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        Class cls = NSClassFromString(@"QQChatVoicePttRecorderManager");
-        if (!cls) return;
-        MSHookMessageEx(cls, @selector(onDeviceReady:), (IMP)MVQQOnDeviceReadyHook, &g_mvOrigQQCb1);
-        MSHookMessageEx(cls, @selector(onRecordReady:), (IMP)MVQQOnRecordReadyHook, &g_mvOrigQQCb2);
-        MSHookMessageEx(cls, @selector(onRecordCancel:), (IMP)MVQQOnRecordCancelHook, &g_mvOrigQQCb3);
-        MVLog(@"[direct] QQ PttRecorderManager 回调钩子已安装（onDeviceReady/onRecordReady/onRecordCancel）");
+        Class op = NSClassFromString(@"NTAIOChat.NTAIOPttRecordOperator");
+        if (op) {
+            MSHookMessageEx(op, @selector(didTriggeredRecord), (IMP)MVQQOperatorDidTrigHook, (IMP *)&g_mvOrigQQDidTrig);
+            MVLog(@"[direct] QQ didTriggeredRecord 钩子已安装");
+        }
+        Class rec = NSClassFromString(@"QQPttRecorder");
+        if (rec) {
+            MSHookMessageEx(rec, @selector(createRecorder), (IMP)MVQQCreateRecorderHook, (IMP *)&g_mvOrigQQCreateRec);
+            MVLog(@"[direct] QQ QQPttRecorder createRecorder 钩子已安装");
+        }
     });
 }
 
-+ (id)stashedQQMgr {
-    @synchronized([MyVoiceDirectSend class]) { return g_mvQQMgr; }
-}
++ (id)stashedQQOperator { @synchronized([MyVoiceDirectSend class]) { return g_mvQQOperator; } }
++ (id)stashedQQRecorder { @synchronized([MyVoiceDirectSend class]) { return g_mvQQRecorder; } }
 
 + (BOOL)available {
     if ([self qqAvailable]) return YES;
@@ -354,16 +374,16 @@ static void MVQQOnRecordCancelHook(id self, SEL _cmd, id a1) { MVQQStash(self);
     if (qqMode) {
         // ★ 2.5.2：必须用聊天页自己的实例（有 delegate 才会发送）。
         //   自己 alloc 的裸实例录音正常但 QQ 不发（真机实测）。
-        target = [MyVoiceDirectSend stashedQQMgr];
+        // ★ 2.6.0：操作器由用户在该聊天按住说话键时扣留（didTriggeredRecord 钩子）。
+        target = [MyVoiceDirectSend stashedQQOperator];
         if (!target) {
-            MVLog(@"[direct] ❌ QQ：尚无激活的 PttRecorderManager（本聊天还没按过说话键）");
+            MVLog(@"[direct] ❌ QQ：尚无激活的 PttRecordOperator（本聊天还没按过说话键）");
             [MyVoiceRecorder cancelFeed];
             fin(NO, @"请先在本聊天按住一次说话键（可取消），激活后再次发送");
             return;
         }
-        stopTarget = target;
-        startSel = @"startRecord";
-        MVLog(@"[direct] QQ 模式：复用聊天页 PttRecorderManager %p", target);
+        startSel = @"didTriggeredRecord";
+        MVLog(@"[direct] QQ 模式：复用 PttRecordOperator %p，结束后对新 QQPttRecorder stopRecord", target);
     }
 
     if (qqMode) {
@@ -441,7 +461,8 @@ static void MVQQOnRecordCancelHook(id self, SEL _cmd, id a1) { MVQQStash(self);
             fin(NO, @"微信内部录音未按预期启动（版本接口可能不同）");
             return;
         }
-        if (done || (started && waited >= capMs)) {
+        // ★ 2.6.0：最短按住 1.3s（QQ 对 <1s 语音按太短丢弃）；TTS 喂完后自动补静音
+        if ((done && waited >= 1300) || (started && waited >= capMs)) {
             [t invalidate];
             MVLog(@"[direct] ✅ TTS 已喂完（%ldms，%lu/%lu 字节）→ %.2fs 后停止并发送",
                   (long)waited, (unsigned long)[MyVoiceRecorder fedBytes],
@@ -462,9 +483,15 @@ static void MVQQOnRecordCancelHook(id self, SEL _cmd, id a1) { MVQQStash(self);
 
 // 停止并发送：优先无参 StopRecord（AudioSender）；退化到 RecordController 的停止方法
 + (NSString*)stopWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc qqMode:(BOOL)qqMode {
-    if (qqMode && stopTarget) {
-        MVInvoke(stopTarget, @"stopRecord:", @[@YES]);   // BOOL=YES=发送
-        return @"QQ PttRecorderManager -stopRecord:YES";
+    if (qqMode) {
+        // ★ 2.6.0：结束本次录音（didTriggeredRecord 新建的 QQPpttRecorder，钩子已扣留）
+        id rec = [MyVoiceDirectSend stashedQQRecorder];
+        if (rec) {
+            MVInvoke(rec, @"stopRecord", nil);
+            return @"QQ QQPttRecorder -stopRecord";
+        }
+        MVLog(@"[direct] ⚠️ QQ 停止时找不到 QQPttRecorder 实例");
+        return @"(无)";
     }
     if (stopTarget) {
         if (isSender) {
