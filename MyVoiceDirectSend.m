@@ -3,6 +3,7 @@
 #import "MyVoiceResolver.h"
 #import "MyVoiceRecorder.h"
 #import <UIKit/UIKit.h>
+#import <AudioToolbox/AudioToolbox.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 
@@ -321,7 +322,8 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
                         id rec = [MyVoiceDirectSend stashedQQRecorder];
                         if (rec) {
                             MVInvoke(rec, @"stopRecord", nil);
-                            MVLog(@"[autoStop] ✅ TTS 已喂完，自动 stopRecord（消息按 TTS 长度发出）");
+                            AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
+                            MVLog(@"[autoStop] ✅ TTS 已喂完，自动 stopRecord + 震动（已发出可松手）");
                             [MyVoiceRecorder resetAfterSend:2.0];
                         }
                     });
