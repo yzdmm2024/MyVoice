@@ -419,27 +419,6 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
 
     MVInvoke(target, startSel, @[me, talker ?: @"", [NSNull null]]);
 
-    __block BOOL qqFailed = NO;
-    if (qqMode) {
-        // ★ QQ：0.5s 后查 isStartSuccess —— 聊天已切换/实例失效时启动会失败，
-        //   立即取消装填与录音并明确提示（否则用户以为发成功了）。
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            BOOL ok = NO;
-            @try {
-                SEL isss = NSSelectorFromString(@"isStartSuccess");
-                if ([(id)target respondsToSelector:isss])
-                    ok = ((BOOL(*)(id, SEL))objc_msgSend)(target, isss);
-            } @catch (NSException *e) {}
-            if (!ok) {
-                qqFailed = YES;
-                MVLog(@"[direct] ❌ QQ isStartSuccess=NO（聊天可能已切换，需重新按住激活）");
-                [MyVoiceRecorder cancelFeed];
-                [MyVoiceDirectSend cancelWith:stopTarget sender:stopIsSender fallbackRC:rc];
-                fin(NO, @"录音启动失败：请在本聊天按住一次说话键（可取消）后重试");
-            }
-        });
-    }
     // ---- 轮询：等「TTS 真正喂完」（fedDone）再松手 ----
     // 参考实现（TTSFloat v29）铁证：按【预估时长】定时 Stop 会截断数据 →
     // 微信一直在等完整音频 → 转圈/半截语音/好久不出来。
@@ -448,7 +427,6 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
     NSInteger capMs = (NSInteger)(MAX(8.0, est * 3.0 + 3.0) * 1000.0);   // 硬上限，防卡死
     __block NSInteger waited = 0;
     [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES block:^(NSTimer *t){
-        if (qqFailed) { [t invalidate]; return; }   // QQ 启动失败已另行收尾
         waited += 100;
         BOOL started = ([MyVoiceRecorder fedBytes] > 0);
         BOOL done    = [MyVoiceRecorder fedDone];
