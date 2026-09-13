@@ -570,6 +570,12 @@
     self.emotionSeg.hidden = cosy;
     self.styleScroll.hidden = !cosy;
 
+    // 当前音色的模型不支持 instruction（cosyvoice-v2 / v1）时把风格条置灰 ——
+    // 合成代码里已按模型跳过该参数（传了会 400），这里同步提示用户"这个音色用不了风格"。
+    BOOL styleOK = cosy ? MVCosySupportsInstruction(MVModelForVoice(MVCurrentVoiceID())) : YES;
+    self.styleScroll.alpha = styleOK ? 1.0 : 0.35;
+    self.styleScroll.userInteractionEnabled = styleOK;
+
     CGFloat y = 84;                                        // 语气 / 风格行
     self.toneLabel.frame   = CGRectMake(14, y + 3, 36, 18);
     self.emotionSeg.frame  = CGRectMake(52, y, W - 66, 22);
@@ -614,12 +620,21 @@
     NSInteger idx = b.tag - 2000;
     MVSetShared(@"cosyStyle", @(idx));
     MVSetShared(@"cosyInstruction", @"");          // 选预设时清掉自定义指令，避免互相覆盖
+    // 一键 = 一步到位：连该风格推荐的语速一起调过去（否则"慢语速"只靠指令，听不出明显差别）
+    double rec = MVCosyStyleRate(idx);
+    if (rec > 0.01) {
+        MVSetShared(@"cosyRate", @(rec));
+        self.speedSlider.value = (float)rec;
+        [self updateSpeedLabel];
+    }
     [self updateStyleButtons];
     [MyVoiceCloud clearSynthesisCache];
     [self prewarmNow];
     NSArray *names = MVCosyStyleNames();
-    [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"风格：%@",
-        (idx >= 0 && idx < (NSInteger)names.count) ? names[(NSUInteger)idx] : @"默认"]];
+    NSString *nm = (idx >= 0 && idx < (NSInteger)names.count) ? names[(NSUInteger)idx] : @"默认";
+    [[MyVoiceManager shared] toast:rec > 0.01
+        ? [NSString stringWithFormat:@"风格：%@（语速 %.2fx）", nm, rec]
+        : [NSString stringWithFormat:@"风格：%@", nm]];
 }
 - (void)updateStyleButtons {
     NSInteger cur = MVCosyStyle();

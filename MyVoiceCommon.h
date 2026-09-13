@@ -296,6 +296,18 @@ static inline NSInteger MVCosyStyle(void) {
 static inline NSArray* MVCosyStyleNames(void) {
     return @[@"默认", @"人情味", @"标准腔", @"慢语速", @"亲切", @"活泼"];
 }
+// 每种风格推荐的语速档位（0 = 不干预，保留用户手动设的值）。
+// 「一键」就该一步到位：只改 instruction 的话，"慢语速"听感差别不够明显。
+static inline double MVCosyStyleRate(NSInteger idx) {
+    switch (idx) {
+        case 1: return 0.95;   // 人情味：略慢一点更自然
+        case 2: return 1.00;   // 标准腔：正常速度
+        case 3: return 0.80;   // 慢语速
+        case 4: return 0.95;   // 亲切
+        case 5: return 1.05;   // 活泼：略快
+        default: return 0.0;
+    }
+}
 // instruction：自定义指令优先，其次按一键风格取预设；返回 nil 表示不传
 static inline NSString* MVCosyInstruction(void) {
     NSString *custom = MVGetStr(@"cosyInstruction");
