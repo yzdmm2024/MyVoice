@@ -8,7 +8,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME := MyVoice
 MyVoice_FILES := Tweak.x MyVoiceManager.m MyVoiceResolver.m MyVoiceEngine.m \
                  MyVoiceAVSEngine.m MyVoicePanel.m MyVoiceSender.m \
-                 MyVoiceRecorder.m MyVoiceDirectSend.m MyVoiceCloud.m MyVoiceCloneController.m
+                 MyVoiceRecorder.m MyVoiceDirectSend.m MyVoiceCloud.m MyVoiceCloneController.m MyVoiceLicense.m
 MyVoice_FRAMEWORKS := Foundation UIKit AVFoundation Security AudioToolbox
 MyVoice_CFLAGS := -fobjc-arc -Wno-error -Wno-deprecated-declarations
 

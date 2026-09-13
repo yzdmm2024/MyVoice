@@ -74,6 +74,11 @@ static inline void MVLogAppend(NSString *line) {
 // 跨进程通知名（设置面板改完发，微信里的面板监听）
 #define MV_CHANGED_NOTIFY "com.yzdmm2024.myvoice/settings"
 
+// ---- 解锁验证 (LocSim 算法: SHA256(UDID) -> 15 位码) ----
+BOOL MVUnlocked(void);
+void MVShowLicenseAlert(void);
+
+
 // 微信录音管线实测采样率：**16kHz / 单声道 / S16**（2.1.0 起改用录音管线劫持后校正）。
 // 证据：AudioQueueNewInput 申请格式 + 实测 buffer 8000B/250ms（= 32000 B/s = 16000 Hz × 2B）。
 // ⚠️ 2.0.17 之前这里写的是 24000（当时是"自己编码 SILK 再直发"的推测值），
@@ -294,7 +299,7 @@ static inline NSArray* MVQwenVoiceList(void) {
         @{@"name": @"晓东(京腔男)",    @"voiceID": @"Dylan",    @"model": @"qwen3-tts-flash"},
         @{@"name": @"晴儿(川语女)",    @"voiceID": @"Sunny",    @"model": @"qwen3-tts-flash"},
         @{@"name": @"Jennifer(美语)",  @"voiceID": @"Jennifer", @"model": @"qwen3-tts-flash"},
-        @{@"name": @"Ryan(男声)",      @"voiceID": @"Ryan",     @"model": @"qwen3-tts-flash"},;
+        @{@"name": @"Ryan(男声)",      @"voiceID": @"Ryan",     @"model": @"qwen3-tts-flash"},
     
         /* 方言音色 */
         @{@"name": @"粤语-阿强(男)",   @"voiceID": @"Rocky",    @"model": @"qwen3-tts-flash"},

@@ -607,6 +607,7 @@
     [g setTranslation:CGPointZero inView:host];
 }
 - (void)togglePanel {
+    if (!MVUnlocked()) { MVShowLicenseAlert(); return; }
     self.panel.hidden = !self.panel.hidden;
     if (self.panel.hidden) { [self stopSessionTimer]; }
     else { [self refreshSession]; [self refreshVoiceState]; [self startSessionTimer]; }
