@@ -45,7 +45,7 @@
 #pragma mark - Liquid Glass 辅助
 
 + (UIVisualEffectView*)glassView {
-    UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
+    UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterial];
     UIVisualEffectView *gv = [[UIVisualEffectView alloc] initWithEffect:effect];
     gv.layer.cornerRadius = 24;
     gv.layer.masksToBounds = YES;
@@ -250,7 +250,7 @@
     closeBtn.frame = CGRectMake(W - 40, 6, 28, 28);
     [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
     closeBtn.titleLabel.font = [UIFont systemFontOfSize:12];
-    [closeBtn setTitleColor:[UIColor colorWithWhite:1 alpha:0.4] forState:UIControlStateNormal];
+    [closeBtn setTitleColor:[UIColor colorWithWhite:0 alpha:0.35] forState:UIControlStateNormal];
     [closeBtn addTarget:self action:@selector(closePanel) forControlEvents:UIControlEventTouchUpInside];
     [self.homeView addSubview:closeBtn];
 
@@ -264,10 +264,10 @@
     self.textView = [[UITextView alloc] initWithFrame:CGRectMake(14, 38, W - 28, 64)];
     self.textView.layer.cornerRadius = 14;
     self.textView.font = [UIFont systemFontOfSize:15];
-    self.textView.textColor = [UIColor colorWithWhite:1 alpha:0.9];
-    self.textView.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
+    self.textView.textColor = [UIColor colorWithWhite:0 alpha:0.85];
+    self.textView.backgroundColor = [UIColor colorWithWhite:0 alpha:0.04];
     self.textView.layer.borderWidth = 0.5;
-    self.textView.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.1].CGColor;
+    self.textView.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.06].CGColor;
     self.textView.textContainerInset = UIEdgeInsetsMake(10, 10, 10, 10);
     [self.homeView addSubview:self.textView];
 
@@ -281,10 +281,10 @@
     self.voiceSelectBtn.frame = CGRectMake(14, 108, W - 28, 40);
     self.voiceSelectBtn.titleLabel.adjustsFontSizeToFitWidth = YES;
     self.voiceSelectBtn.titleLabel.minimumScaleFactor = 0.72;
-    self.voiceSelectBtn.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
+    self.voiceSelectBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.04];
     self.voiceSelectBtn.layer.cornerRadius = 14;
     self.voiceSelectBtn.layer.borderWidth = 0.5;
-    self.voiceSelectBtn.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.1].CGColor;
+    self.voiceSelectBtn.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.06].CGColor;
     self.voiceSelectBtn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
     self.voiceSelectBtn.contentEdgeInsets = UIEdgeInsetsMake(0, 12, 0, 12);
     [self.voiceSelectBtn addTarget:self action:@selector(showPicker) forControlEvents:UIControlEventTouchUpInside];
@@ -295,19 +295,19 @@
     self.sendBtn.frame = CGRectMake(14, 156, (W - 38) * 0.58, 42);
     [self.sendBtn setTitle:@"合成语音" forState:UIControlStateNormal];
     self.sendBtn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
-    [self.sendBtn setTitleColor:[UIColor colorWithWhite:1 alpha:0.95] forState:UIControlStateNormal];
+    [self.sendBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     self.sendBtn.layer.cornerRadius = 16;
     self.sendBtn.clipsToBounds = YES;
     // 蓝液态玻璃
     CAGradientLayer *sg = [CAGradientLayer layer];
     sg.frame = CGRectMake(0, 0, self.sendBtn.frame.size.width, 42);
-    sg.colors = @[(id)[UIColor colorWithRed:0 green:0.42 blue:0.95 alpha:0.55].CGColor,
-                  (id)[UIColor colorWithRed:0.3 green:0.6 blue:1 alpha:0.35].CGColor];
+    sg.colors = @[(id)[UIColor colorWithRed:0 green:0.42 blue:0.95 alpha:1].CGColor,
+                  (id)[UIColor colorWithRed:0.25 green:0.55 blue:1 alpha:1].CGColor];
     sg.startPoint = CGPointMake(0, 0);
     sg.endPoint = CGPointMake(0.8, 1);
     [self.sendBtn.layer insertSublayer:sg atIndex:0];
     self.sendBtn.layer.borderWidth = 0.5;
-    self.sendBtn.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.25].CGColor;
+    self.sendBtn.layer.borderColor = [UIColor clearColor].CGColor;
     UIView *shl = [[UIView alloc] initWithFrame:CGRectMake(2, 1, self.sendBtn.frame.size.width - 4, 18)];
     shl.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1];
     shl.userInteractionEnabled = NO;
@@ -320,11 +320,11 @@
     self.previewBtn.frame = CGRectMake(14 + (W - 38) * 0.58 + 10, 156, (W - 38) * 0.42 - 10, 42);
     [self.previewBtn setTitle:@"预览" forState:UIControlStateNormal];
     self.previewBtn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
-    [self.previewBtn setTitleColor:[UIColor colorWithWhite:1 alpha:0.7] forState:UIControlStateNormal];
+    [self.previewBtn setTitleColor:[UIColor colorWithWhite:0 alpha:0.65] forState:UIControlStateNormal];
     self.previewBtn.layer.cornerRadius = 16;
-    self.previewBtn.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
+    self.previewBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.04];
     self.previewBtn.layer.borderWidth = 0.5;
-    self.previewBtn.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.12].CGColor;
+    self.previewBtn.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.06].CGColor;
     UIView *phl = [[UIView alloc] initWithFrame:CGRectMake(2, 1, self.previewBtn.frame.size.width - 4, 16)];
     phl.backgroundColor = [UIColor colorWithWhite:1 alpha:0.05];
     phl.userInteractionEnabled = NO;
@@ -337,11 +337,11 @@
     self.cloneBtn.frame = CGRectMake(14, 206, W - 28, 40);
     [self.cloneBtn setTitle:@"＋ 音色管理" forState:UIControlStateNormal];
     self.cloneBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
-    [self.cloneBtn setTitleColor:[UIColor colorWithWhite:1 alpha:0.65] forState:UIControlStateNormal];
+    [self.cloneBtn setTitleColor:[UIColor colorWithRed:0 green:0.42 blue:0.95 alpha:1] forState:UIControlStateNormal];
     self.cloneBtn.layer.cornerRadius = 14;
-    self.cloneBtn.backgroundColor = [UIColor colorWithWhite:1 alpha:0.05];
+    self.cloneBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.04];
     self.cloneBtn.layer.borderWidth = 0.5;
-    self.cloneBtn.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.1].CGColor;
+    self.cloneBtn.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.06].CGColor;
     [self.cloneBtn addTarget:self action:@selector(onClone) forControlEvents:UIControlEventTouchUpInside];
     [self.homeView addSubview:self.cloneBtn];
 
@@ -585,7 +585,7 @@
     NSString *s = [[MyVoiceManager shared] talkerStatus];
     BOOL ok = [s rangeOfString:@"未识别"].location == NSNotFound;
     self.sessionLabel.text = [NSString stringWithFormat:@"%@  %@", ok ? @"●" : @"○", ok ? @"已连接" : @"未识别"];
-    self.sessionLabel.textColor = ok ? [UIColor colorWithWhite:1 alpha:0.35] : [UIColor colorWithWhite:1 alpha:0.2];
+    self.sessionLabel.textColor = ok ? [UIColor colorWithWhite:0 alpha:0.35] : [UIColor colorWithWhite:0 alpha:0.2];
 }
 - (void)startSessionTimer {
     if (self.sessionTimer) return;
