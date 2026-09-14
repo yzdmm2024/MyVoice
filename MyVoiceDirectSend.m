@@ -303,7 +303,7 @@ static id gAS = nil;      // AudioSender
     //   轮询 TTS 喂完后对新 QQPttRecorder 调 stopRecord。
     NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
     if ([bid rangeOfString:@"tencent.mqq"].location != NSNotFound &&
-        NSClassFromString(@"NTAIOChat.NTAIOPttRecordOperator") != nil) {
+        NSClassFromString(@"QQPttRecordOperator") != nil) {
         [self installQQHooksIfNeeded];
         return YES;
     }
@@ -352,7 +352,7 @@ static void ensureQQPTVHook(void) {
     MVLog(@"[direct] QQ QQPushToTalkView 钩子已安装");
 }
 
-static void MVQQOperatorDidTrigHook(id self, SEL _cmd) {
+static void MVQQOperatorDidTrigHook(id self, SEL _cmd, id arg) {
     @synchronized([MyVoiceDirectSend class]) {
         if (g_mvQQOperator != self) {
             if (g_mvQQOperator) CFRelease((__bridge CFTypeRef)g_mvQQOperator);
@@ -361,7 +361,8 @@ static void MVQQOperatorDidTrigHook(id self, SEL _cmd) {
             MVLog(@"[direct] 已扣留聊天页 PttRecordOperator %p（当前聊天已激活）", self);
         }
     }
-    ((void(*)(id, SEL))g_mvOrigQQDidTrig)(self, _cmd);
+    if (g_mvOrigQQDidTrig)
+        ((void(*)(id, SEL, id))g_mvOrigQQDidTrig)(self, _cmd, arg);
 }
 
 static id MVQQCreateRecorderHook(id self, SEL _cmd) {
@@ -382,10 +383,10 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
 + (void)installQQHooks {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        Class op = NSClassFromString(@"NTAIOChat.NTAIOPttRecordOperator");
+        Class op = NSClassFromString(@"QQPttRecordOperator");
         if (op) {
-            MSHookMessageEx(op, @selector(didTriggeredRecord), (IMP)MVQQOperatorDidTrigHook, (IMP *)&g_mvOrigQQDidTrig);
-            MVLog(@"[direct] QQ didTriggeredRecord 钩子已安装");
+            MSHookMessageEx(op, @selector(didStartRecordAsync:), (IMP)MVQQOperatorDidTrigHook, (IMP *)&g_mvOrigQQDidTrig);
+            MVLog(@"[direct] QQ didStartRecordAsync: 钩子已安装");
         }
         Class rec = NSClassFromString(@"QQPttRecorder");
         if (rec) {
@@ -401,11 +402,11 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
 //   这是 2.8.15~2.8.19 永远退回手动的根因（钩子在点发送时才装，窗口早已出现，捕获恒为 nil）。
 static void MVQQTryInstallHooks(void) {
     @synchronized([MyVoiceDirectSend class]) {
-        Class op = NSClassFromString(@"NTAIOChat.NTAIOPttRecordOperator");
+        Class op = NSClassFromString(@"QQPttRecordOperator");
         if (op && !g_mvQQOpHookInstalled) {
-            MSHookMessageEx(op, @selector(didTriggeredRecord), (IMP)MVQQOperatorDidTrigHook, (IMP *)&g_mvOrigQQDidTrig);
+            MSHookMessageEx(op, @selector(didStartRecordAsync:), (IMP)MVQQOperatorDidTrigHook, (IMP *)&g_mvOrigQQDidTrig);
             g_mvQQOpHookInstalled = YES;
-            MVLog(@"[direct] QQ didTriggeredRecord 钩子已安装");
+            MVLog(@"[direct] QQ didStartRecordAsync: 钩子已安装");
         }
         Class rec = NSClassFromString(@"QQPttRecorder");
         if (rec && !g_mvQQRecHookInstalled) {
