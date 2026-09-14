@@ -543,6 +543,7 @@
     NSMutableDictionary *entry = [NSMutableDictionary dictionary];
     entry[@"name"]    = name.length ? name : @"克隆音色";
     entry[@"voiceID"] = voiceID;
+    entry[@"provider"] = @0; // ★ 2.8.28 克隆/设计皆属 CosyVoice
     entry[@"model"]   = model;
     NSInteger same = -1;
     for (NSUInteger i = 0; i < vs.count; i++) {
