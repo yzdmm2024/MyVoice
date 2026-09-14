@@ -174,7 +174,7 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
         if (pcm.length && !e) MVTTSCachePut(key, pcm);
         completion(pcm, e);
     };
-    if (MVTTSProvider() == 1) {
+    if (MVVoiceProvider(voiceID) == 1) {
         [self synthesizeQwenText:text voiceID:voiceID completion:wrap];
         return;
     }
@@ -190,7 +190,7 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
     if (!text.length || text.length > 300) return;
     if (MVEngineMode() != 1) return;                       // 离线引擎不吃网络，预合成没意义
     if (!MVAPIKey().length)  return;                        // 没配 Key：交给发送路径去明确报错
-    if (MVTTSProvider() == 0 && !(voiceID.length ? voiceID : MVCurrentVoiceID()).length) return;
+    if (MVVoiceProvider(voiceID) == 0 && !(voiceID.length ? voiceID : MVCurrentVoiceID()).length) return;
     if (MVTTSCacheGet(MVTTSCacheKey(text, voiceID)).length) return;   // 已经缓存过
 
     MVLog(@"[prewarm] 后台预合成 %lu 字…（不影响发送，只为点「发送」时零等待）",
