@@ -491,3 +491,138 @@ static inline BOOL MVGetBool2(id obj, NSString *sel, id a1, BOOL a2) {
     if (!obj || ![obj respondsToSelector:s]) return NO;
     return ((BOOL(*)(id,SEL,id,BOOL))objc_msgSend)(obj, s, a1, a2);
 }
+
+// ============================================================
+// ★ 补丁（2.2.10 修复编译）：MyVoiceCloud.m / MyVoiceCloneController.m 调用了以下
+//   MV* 辅助函数，但此前它们从未在仓库里定义（main 分支 HEAD 不可编译）。
+//   这里按既有 MV* 访问器风格补上，语义与调用点一致：
+//     · 表现参数（rate/pitch/volume/style/instruction）读共享配置，缺省走模型默认；
+//     · 模型能力判定按 CosyVoice v3.5/v3-flash、Qwen instruct 系列；
+//     · 复刻模型列表与方言能力提示供克隆界面使用。
+// ============================================================
+
+// ---- CosyVoice 复刻模型（create_voice 的 target_model）----
+static inline NSString* MVCosyModel(void) {
+    NSString *v = MVGetStr(@"cosyModel");
+    return v.length ? v : MVDesignModel();
+}
+
+// ---- CosyVoice 表现参数（缺省 = 模型默认朗读腔，不会把 AI 味强加进去）----
+static inline NSInteger MVCosyStyle(void) {
+    id v = MVGet(@"cosyStyle");
+    return v ? [v integerValue] : 0;
+}
+static inline double MVCosyRate(void) {
+    id v = MVGet(@"cosyRate");
+    if (v) { double d = [v doubleValue]; if (d >= 0.5 && d <= 2.0) return d; }
+    return 1.0;
+}
+static inline double MVCosyPitch(void) {
+    id v = MVGet(@"cosyPitch");
+    if (v) { double d = [v doubleValue]; if (d >= 0.5 && d <= 2.0) return d; }
+    return 1.0;
+}
+static inline NSInteger MVCosyVolume(void) {
+    id v = MVGet(@"cosyVolume");
+    if (v) { NSInteger i = [v integerValue]; if (i >= 0 && i <= 100) return i; }
+    return 50;   // 与 MyVoiceCloud.m 的「vol != 50 才发送」保持一致
+}
+static inline NSString* MVCosyInstruction(void) {
+    return MVGetStr(@"cosyInstruction");
+}
+
+// ---- 模型能力判定 ----
+// instruction 仅在 cosyvoice v3.5-flash / v3.5-plus / v3-flash 上可用
+static inline BOOL MVCosySupportsInstruction(NSString *model) {
+    if (!model.length) return NO;
+    return [model rangeOfString:@"v3.5"].location != NSNotFound
+        || [model rangeOfString:@"v3-flash"].location != NSNotFound;
+}
+// 复刻质量参数（max_prompt_audio_length / enable_preprocess）同样仅 v3.5 / v3-flash 支持
+static inline BOOL MVCloneSupportsQuality(NSString *model) {
+    if (!model.length) return NO;
+    return [model rangeOfString:@"v3.5"].location != NSNotFound
+        || [model rangeOfString:@"v3-flash"].location != NSNotFound;
+}
+
+// ---- 复刻模型列表（克隆界面「复刻模型」分段控件）----
+static inline NSArray* MVCosyModelList(void) {
+    return @[ @"cosyvoice-v3.5-plus", @"cosyvoice-v3.5-flash", @"cosyvoice-v3-flash" ];
+}
+static inline NSArray* MVCosyModelLabels(void) {
+    return @[ @"v3.5-plus", @"v3.5-flash", @"v3-flash" ];
+}
+static inline NSInteger MVCosyModelIndex(NSString *model) {
+    NSArray *list = MVCosyModelList();
+    for (NSUInteger i = 0; i < list.count; i++)
+        if ([list[i] isEqualToString:model]) return (NSInteger)i;
+    return 0;
+}
+
+// ---- 某复刻模型可用的方言音色（决定「复刻完能说哪些方言」）----
+static inline NSArray* MVDialectListForModel(NSString *model) {
+    if (!model.length) return @[];
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSDictionary *d in MVCosyDialectList()) {
+        if ([d isKindOfClass:[NSDictionary class]] && [d[@"model"] isEqualToString:model])
+            [out addObject:d];
+    }
+    return out;
+}
+
+// ---- 复刻质量参数 ----
+static inline double MVCloneMaxLen(void) {
+    id v = MVGet(@"cloneMaxLen");
+    if (v) { double d = [v doubleValue]; if (d > 0 && d <= 60) return d; }
+    return 30.0;   // 参考音频最大时长（秒）
+}
+static inline BOOL MVClonePreprocess(void) {
+    id v = MVGet(@"clonePreprocess");
+    return v ? [v boolValue] : YES;
+}
+
+// ---- 千问 Qwen-TTS 调节 ----
+static inline NSString* MVQwenInstructions(void) {
+    return MVGetStr(@"qwenInstructions");
+}
+// 仅 qwen3-tts-instruct-flash 系列认 instructions 参数
+static inline BOOL MVQwenSupportsInstructions(NSString *model) {
+    if (!model.length) return NO;
+    return [model rangeOfString:@"instruct"].location != NSNotFound;
+}
+
+// ---- 按 voiceID 反查其复刻时绑定的 target_model（合成模型必须与之一致）----
+static inline NSString* MVModelForVoice(NSString *voiceID) {
+    if (voiceID.length) {
+        for (NSDictionary *d in MVVoices()) {
+            if ([d isKindOfClass:[NSDictionary class]] && [d[@"voiceID"] isEqualToString:voiceID]) {
+                NSString *m = d[@"model"];
+                if (m.length) return m;
+            }
+        }
+        for (NSDictionary *d in MVCosyDialectList()) {
+            if ([d isKindOfClass:[NSDictionary class]] && [d[@"voiceKey"] isEqualToString:voiceID]) {
+                NSString *m = d[@"model"];
+                if (m.length) return m;
+            }
+        }
+    }
+    return MVCurrentModel();
+}
+
+// ---- 把 DashScope HTTP 错误码/响应体翻译成对用户友好的中文提示 ----
+static inline NSString* MVFriendlyAPIError(NSInteger code, NSString *msg, NSString *fallback) {
+    NSString *body = [msg stringByTrimmingCharactersInSet:
+        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (body.length > 200) body = [body substringToIndex:200];
+    switch (code) {
+        case 401: return @"API Key 无效或未配置（设置 → 我的语音）";
+        case 403: return @"密钥未开通该服务，或地域 / 业务空间不对";
+        case 404: return @"请求的资源不存在（检查模型名是否正确）";
+        case 429: return @"触发限流，请稍后再试";
+        default:  break;
+    }
+    NSString *fb = fallback.length ? fallback : @"请求失败";
+    if (body.length) return [NSString stringWithFormat:@"%@（HTTP %ld：%@）", fb, (long)code, body];
+    return [NSString stringWithFormat:@"%@（HTTP %ld）", fb, (long)code];
+}
