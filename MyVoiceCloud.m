@@ -295,7 +295,7 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
         if (code != 200) {
             NSString *msg = [[NSString alloc] initWithData:d?:[NSData data] encoding:NSUTF8StringEncoding];
             MVLog(@"[qwen] TTS HTTP %ld body=%@", (long)code, msg);
-            completion(nil, MVErr(MVFriendlyAPIError(code, msg, @"千问合成失败")));
+            completion(nil, MVErr(MVFriendlyAPIError(code, msg, [NSString stringWithFormat:@"千问合成失败(模型 %@)", model])));
             return;
         }
         NSError *je = nil;
@@ -410,7 +410,7 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
         if (code != 200) {
             NSString *msg = [[NSString alloc] initWithData:d?:[NSData data] encoding:NSUTF8StringEncoding];
             MVLog(@"[cloud] TTS HTTP %ld body=%@", (long)code, msg);
-            completion(nil, MVErr(MVFriendlyAPIError(code, msg, @"TTS 失败")));
+            completion(nil, MVErr(MVFriendlyAPIError(code, msg, [NSString stringWithFormat:@"CosyVoice 合成失败(模型 %@)", model])));
             return;
         }
         // ★ 2.4.3：真机抓包确认响应结构是 output.audio.url（http 链接，24h 有效），

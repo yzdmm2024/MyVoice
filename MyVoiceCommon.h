@@ -1040,6 +1040,9 @@ static inline NSString* MVFriendlyAPIError(NSInteger code, NSString *body, NSStr
     NSString *why = nil;
     if ([errCode containsString:@"InvalidApiKey"] || code == 401)
         why = @"API Key 无效或已失效（去 设置→我的语音 重填北京地域的 DashScope Key）";
+    else if ([raw containsString:@"Free quota"] || [raw containsString:@"use free tier only"] ||
+             [raw containsString:@"exhausted"] || [raw containsString:@"paid basis"] || [raw containsString:@"add funds"])
+        why = @"该模型免费额度已耗尽（DashScope 默认仅免费层模式）。去百炼控制台(bailian.console.aliyun.com)给该模型开通按量付费，或账户充值，并关闭「Use free tier only」开关";
     else if ([errCode containsString:@"AccessDenied"] || [errCode containsString:@"Model.AccessDenied"] || code == 403)
         why = @"该模型没有权限（去百炼控制台开通对应模型，或换一个模型）";
     else if ([errCode containsString:@"Arrearage"])
