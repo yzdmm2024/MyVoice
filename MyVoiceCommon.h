@@ -386,11 +386,17 @@ static inline NSDictionary* MVDialectTips(void) {
 // 方言 → instruction（拼接"请用X说"+方言特征描述）。
 // ★ 2.8.8：旧版只一句"请用X说"，模型常常当作"提醒词"忽略；2.8.8 把方言的发声特征
 //   也写进去，模型有了具体"听感参考"，效果明显更稳。
+// ★ 2.8.14：阳江话/皖北话 引擎未训练，纯文本指令会被忽略退回普通话。
+//   映射成最接近的已支持方言（阳江话→广东话/粤语，同属粤语片；皖北话→河南话/中原官话），
+//   让指令真正生效、出真腔（非精确当地话，但明显不是普通话）。
 static inline NSString* MVDialectInstruction(NSString *dialect) {
     if (!dialect.length || [dialect isEqualToString:@"普通话"]) return nil;
-    NSString *tip = MVDialectTips()[dialect];
-    if (tip.length) return [NSString stringWithFormat:@"请用%@说这句话。%@", dialect, tip];
-    return [NSString stringWithFormat:@"请用%@说这句话。", dialect];
+    NSString *engineDialect = dialect;
+    if ([dialect isEqualToString:@"阳江话"]) engineDialect = @"广东话";
+    else if ([dialect isEqualToString:@"皖北话"]) engineDialect = @"河南话";
+    NSString *tip = MVDialectTips()[engineDialect];
+    if (tip.length) return [NSString stringWithFormat:@"请用%@说这句话。%@", engineDialect, tip];
+    return [NSString stringWithFormat:@"请用%@说这句话。", engineDialect];
 }
 
 // 风格 → 语气句（按索引，不读 prefs，便于千问/克隆共用）
