@@ -304,7 +304,7 @@ static id gAS = nil;      // AudioSender
     NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
     if ([bid rangeOfString:@"tencent.mqq"].location != NSNotFound &&
         NSClassFromString(@"NTAIOChat.NTAIOPttRecordOperator") != nil) {
-        [self installQQHooks];
+        [self installQQHooksIfNeeded];
         return YES;
     }
     return NO;
@@ -317,6 +317,8 @@ static id  g_mvQQOperator = nil;   // 最近一次按住的聊天操作器（强
 static id  g_mvQQRecorder = nil;   // 最近一次录音的 QQPttRecorder（每次录音新建）
 static IMP g_mvOrigQQDidTrig = NULL;
 static IMP g_mvOrigQQCreateRec = NULL;
+static BOOL g_mvQQOpHookInstalled  = NO;   // ★ 2.8.20：operator 钩独立标志（类可能晚加载）
+static BOOL g_mvQQRecHookInstalled = NO;   // ★ 2.8.20：recorder 钩独立标志
 
 // ★ 2.8.19：直接捕获 QQPushToTalkView 实例（不再递归遍历 vc.view.subviews —— 该遍历会在
 //   QQ 切换语音模式时碰到正在释放的视图，for...in 拿到悬空数组 → EXC_BAD_ACCESS 闪退）。
@@ -325,6 +327,7 @@ static id  g_mvQQPushToTalkView = nil;   // 当前语音模式下的「按住说
 static IMP g_mvOrigQQPTVDidMoveToWindow = NULL;
 static IMP g_mvOrigQQPTVStartRecord = NULL;
 static BOOL g_mvQQPTVHookInstalled = NO;
+static BOOL g_mvQQRetryScheduled   = NO;   // ★ 2.8.20：类加载重试链只挂一次
 
 static void MVQQPTVDidMoveToWindowHook(id self, SEL _cmd, UIWindow *window) {
     @synchronized([MyVoiceDirectSend class]) { g_mvQQPushToTalkView = window ? self : nil; }
@@ -392,6 +395,47 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
     });
 }
 
+// ★ 2.8.20：把「能装上的钩子都装上」（类可能到用户首次进语音模式才被 dyld 加载，
+//   故每次调用都重试，按各自标志幂等）。在 tweak 启动期就反复调本函数，
+//   确保用户「切到语音模式 → didMoveToWindow 触发」时钩子早已在位、能扣留视图实例——
+//   这是 2.8.15~2.8.19 永远退回手动的根因（钩子在点发送时才装，窗口早已出现，捕获恒为 nil）。
+static void MVQQTryInstallHooks(void) {
+    @synchronized([MyVoiceDirectSend class]) {
+        Class op = NSClassFromString(@"NTAIOChat.NTAIOPttRecordOperator");
+        if (op && !g_mvQQOpHookInstalled) {
+            MSHookMessageEx(op, @selector(didTriggeredRecord), (IMP)MVQQOperatorDidTrigHook, (IMP *)&g_mvOrigQQDidTrig);
+            g_mvQQOpHookInstalled = YES;
+            MVLog(@"[direct] QQ didTriggeredRecord 钩子已安装");
+        }
+        Class rec = NSClassFromString(@"QQPttRecorder");
+        if (rec && !g_mvQQRecHookInstalled) {
+            MSHookMessageEx(rec, @selector(createRecorder), (IMP)MVQQCreateRecorderHook, (IMP *)&g_mvQQOrigQQCreateRec);
+            g_mvQQRecHookInstalled = YES;
+            MVLog(@"[direct] QQ QQPttRecorder createRecorder 钩子已安装");
+        }
+        Class vcls = NSClassFromString(@"QQPushToTalkView");
+        if (vcls && !g_mvQQPTVHookInstalled) {
+            MSHookMessageEx(vcls, @selector(didMoveToWindow), (IMP)MVQQPTVDidMoveToWindowHook, (IMP *)&g_mvOrigQQPTVDidMoveToWindow);
+            MSHookMessageEx(vcls, @selector(startRecordAsync), (IMP)MVQQPTVStartRecordHook, (IMP *)&g_mvOrigQQPTVStartRecord);
+            g_mvQQPTVHookInstalled = YES;
+            MVLog(@"[direct] QQ QQPushToTalkView 钩子已安装");
+        }
+    }
+}
+
+// ★ 2.8.20：tweak 启动即挂重试链（最多 ~12s），类一加载就装上；非 QQ 直接返回。
++ (void)installQQHooksIfNeeded {
+    if (!mvDiagIsQQ()) return;
+    MVQQTryInstallHooks();
+    if (g_mvQQOpHookInstalled && g_mvQQRecHookInstalled && g_mvQQPTVHookInstalled) return;
+    if (g_mvQQRetryScheduled) return;
+    g_mvQQRetryScheduled = YES;
+    for (int i = 0; i < 24; i++) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((0.5 * (i + 1)) * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ MVQQTryInstallHooks(); });
+    }
+}
+
 + (id)stashedQQOperator { @synchronized([MyVoiceDirectSend class]) { return g_mvQQOperator; } }
 // ★ 2.6.3：手动按住模式的「自动松手」监视器。
 //   用户按住说话 → QQ 创建新 QQPttRecorder（createRecorder 钩子扣留）→ 队列被喂 TTS；
@@ -441,7 +485,7 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
 //            → NTAIOChat.NTAIOPttRecordOperator -sendAudioWithAudioModel:completion:（真发）
 //   故「自动发送」= 直接调 startRecordAsync 开始 + 喂完 TTS 后调 sendRecordData 发送，零手动。
 + (id)mvQQFindPushToTalkView {
-    ensureQQPTVHook();   // 懒安装（类可能刚加载）
+    [self installQQHooksIfNeeded];   // ★ 2.8.20：确保钩子已装（类可能刚加载）
     @synchronized([MyVoiceDirectSend class]) {
         id v = g_mvQQPushToTalkView;
         if (v && [v isKindOfClass:NSClassFromString(@"QQPushToTalkView")] && [v window] != nil) {
@@ -449,7 +493,23 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
             return v;
         }
     }
-    MVLog(@"[direct] QQ 自动：尚未捕获到 QQPushToTalkView（需先处于语音模式，或先点一次「按住说话」）");
+    // ★ 2.8.20：钩子可能在视图出现前没装上（极端情况）→ 实时遍历当前聊天页视图树找
+    //   QQPushToTalkView，避免「永远退回手动」。遍历只读类名、不碰视图状态，安全。
+    Class vcls = NSClassFromString(@"QQPushToTalkView");
+    if (vcls) {
+        @try {
+            UIViewController *vc = [MyVoiceResolver currentChatVC];
+            if (vc && vc.view) {
+                id found = MVFindQQRecordButtonInView(vc.view, @[NSStringFromClass(vcls)]);
+                if (found) {
+                    @synchronized([MyVoiceDirectSend class]) { g_mvQQPushToTalkView = found; }
+                    MVLog(@"[direct] QQ 自动：实时遍历找到 QQPushToTalkView %p", found);
+                    return found;
+                }
+            }
+        } @catch (NSException *e) { MVLog(@"[direct] QQ 自动：遍历视图树异常 %@", e.reason); }
+    }
+    MVLog(@"[direct] QQ 自动：未捕获到 QQPushToTalkView（需先处于语音模式）");
     return nil;
 }
 

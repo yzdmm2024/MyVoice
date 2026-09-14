@@ -1,8 +1,8 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 2.8.19
+Version: 2.8.20
 Architecture: iphoneos-arm64
-Description: 节约时间，打字即可。★ 2.8.19 修复 2.8.18 点「合成语音」闪退：根因是递归遍历 vc.view.subviews 找 QQPushToTalkView 时碰到 QQ 正在释放的视图，for...in 拿到悬空数组 → EXC_BAD_ACCESS。改法：用 MSHookMessageEx 钩住 QQPushToTalkView（didMoveToWindow/startRecordAsync）直接捕获视图实例，零遍历、零主线程阻塞，彻底不闪退；拿不到捕获视图时安全退回「请手动按住」提示。★ 2.8.18 修 QQ 全自动发送：实机 frida 抓包确认真链路（QQPushToTalkView.startRecordAsync 开始 → QQPttRecorder.sendRecordData 发送），点一下就自动发送无需手动按住。★ 2.8.14 修阳江话/皖北话仍是普通话：引擎未训练这两种方言，纯文本指令被忽略；改为映射成最接近的已支持方言（阳江话→广东话/粤语，皖北话→河南话/中原官话），指令真正生效出真腔。 修阳江话/皖北话仍是普通话：引擎未训练这两种方言，纯文本指令被忽略；改为映射成最接近的已支持方言（阳江话→广东话/粤语，皖北话→河南话/中原官话），指令真正生效出真腔。★ 2.8.13 ①克隆音色跨 App 共享（微信克隆 QQ 也显示）②保留 2.8.12 键盘修复。 ★ 2.8.11 修复 .aud 解码错误码 -2。 ★ 2.8.15 QQ 全自动发送：点「合成语音」无需先手动按住「按住 说话」——主动定位当前聊天页 PttRecordOperator 直接触发录音（与手动按住同链路），找不到才退回手动兜底。
+Description: 节约时间，打字即可。★ 2.8.20 修 QQ 全自动发送真正失效根因：2.8.15~2.8.19 三个 QQ 钩子（didTriggeredRecord/createRecorder/QQPushToTalkView）是在点「合成语音」时才懒安装，而 QQPushToTalkView 的 didMoveToWindow 在用户切语音模式时已触发 → 钩子永远来不及扣住视图 → 永远退回「请手动按住」。改为 tweak 启动即挂钩子（带类加载重试），切语音模式时即扣留视图实例；发送时再叠加「实时遍历视图树找 QQPushToTalkView」兜底，只要处于语音模式点合成语音即自动 startRecordAsync 开始 + sendRecordData 发送，无需手动按住。★ 2.8.19 修复 2.8.18 点「合成语音」闪退（递归遍历视图树拿悬空数组 → EXC_BAD_ACCESS），改钩住 QQPushToTalkView 直接捕获。★ 2.8.18 修 QQ 全自动发送：实机 frida 抓包确认真链路（QQPushToTalkView.startRecordAsync 开始 → QQPttRecorder.sendRecordData 发送）。★ 2.8.14 修阳江话/皖北话仍是普通话：映射成最接近的已支持方言（阳江话→广东话/粤语，皖北话→河南话/中原官话）。★ 2.8.13 ①克隆音色跨 App 共享（微信克隆 QQ 也显示）②保留 2.8.12 键盘修复。★ 2.8.11 修复 .aud 解码错误码 -2。
 Maintainer: yzdmm2024
 Author: yzdmm2024
 Section: Tweaks

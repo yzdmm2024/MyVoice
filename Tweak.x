@@ -5,6 +5,7 @@
 #import <objc/runtime.h>
 #import <UIKit/UIKit.h>
 #import "MyVoiceDiag.h"
+#import "MyVoiceDirectSend.h"
 
 // ============================================================
 // hook 一：会话捕获（2.0.14 起）
@@ -71,7 +72,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.8.19（QQ 全自动发送：钩住 QQPushToTalkView 捕获视图实例，零遍历、不闪退；点合成语音直接 startRecordAsync 开始 + sendRecordData 发送，无需手动按住）");
+        MVLog(@"载入 我的语音 v2.8.20（★ QQ 全自动发送修复：tweak 启动即挂 didTriggeredRecord/createRecorder/QQPushToTalkView 三钩子（带类加载重试），用户切语音模式时 didMoveToWindow 已被钩住 → 成功扣留视图实例；点合成语音直接 startRecordAsync 开始 + sendRecordData 发送，无需手动按住）");
         MVLog(@"宿主 App：%@（版本 %@）",
               [NSBundle mainBundle].bundleIdentifier ?: @"?",
               [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");
@@ -90,12 +91,14 @@
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ [MyVoiceManager setupWhenHostReady]; });
 
-    // ④ 2.8.18：QQ 内仍枚举相关类（仅打印，便于排障），实际发送已改走真链路
+    // ④ 2.8.20：QQ 内启动即挂直发钩子（带类加载重试），确保用户切到语音模式时
+    //   didMoveToWindow 已被钩住、能扣留 QQPushToTalkView；并保留类枚举诊断。
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         if (mvDiagIsQQ()) {
+            [MyVoiceDirectSend installQQHooksIfNeeded];
             mvDiagDumpClasses();
-            MVLog(@"[mvdiag] 诊断就绪：点「合成语音」即自动开始并发送（无需手动按住）");
+            MVLog(@"[mvdiag] QQ 直发钩子已挂：点「合成语音」即自动开始并发送（需处于语音模式）");
         }
     });
 
