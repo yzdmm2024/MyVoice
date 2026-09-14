@@ -36,6 +36,10 @@
 // 是否具备直发条件（能找到微信内部录音控制器）。无 UI 调用，安全。
 + (BOOL)available;
 
+// ★ 2.8.20：tweak 启动即挂 QQ 直发钩子（didTriggeredRecord/createRecorder/QQPushToTalkView，
+// 带类加载重试）。供 Tweak.x 在 host-ready 时调用，需公开声明。
++ (void)installQQHooksIfNeeded;
+
 // 无界面直发：TTS 必须已经装填进录音管线（MyVoiceRecorder feedPCM:）。
 // 直接调微信内部接口开始录音 → 轮询确认录音真的被接管 → 到时长后停止并发送。
 // completion(ok, reason)：ok=NO 时调用方应回退成「手动按住说话」提示。
