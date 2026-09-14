@@ -868,18 +868,12 @@ static void MVDYTryInstallHooks(void) {
         if (!m4a) { MVLog(@"[direct] 抖音 m4a 编码失败"); return; }
         @synchronized([MyVoiceDirectSend class]) { g_mvDouyinTTSPath = m4a; g_mvDouyinTTSReady = YES; }
         MVLog(@"[direct] 抖音 TTS 就绪 m4a=%@ (≈%.2fs) —— 等待用户松手即替换", m4a, pcm.length / 32000.0);
-        // ★ 2.8.26：就绪即播报「可以松手了」+ 震动，明确告诉用户何时松手（不再无提示盲等）
+        // ★ 2.8.27：就绪即【文字提示】"可以松手了" + 震动（与 QQ 一致，去掉语音播报）。
+        //   提示时机 = TTS 合成完成（时长≈文字长度），用户按住等到这行字出现再松手即可。
         MVOnMain(^{
             @try {
                 AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
-                AVSpeechUtterance *u = [AVSpeechUtterance speechUtteranceWithString:@"可以松手了"];
-                u.voice = [AVSpeechSynthesisVoice voiceWithLanguage:@"zh-CN"];
-                u.rate  = AVSpeechUtteranceDefaultSpeechRate;
-                u.volume = 1.0;
-                static AVSpeechSynthesizer *gMVSyn = nil;
-                static dispatch_once_t once;
-                dispatch_once(&once, ^{ gMVSyn = [[AVSpeechSynthesizer alloc] init]; });
-                [gMVSyn speakUtterance:u];
+                [[MyVoiceManager shared] toast:@"✅ 可以松手了"];
             } @catch (NSException *ex) { MVLog(@"[direct] 抖音 松手提示异常 %@", ex.reason); }
         });
     };

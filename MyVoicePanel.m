@@ -559,7 +559,7 @@
     BOOL cosy = (MVTTSProvider() == 0);
     if (self.dialectBtn) {
         NSString *d = MVGetStr(@"cosyDialect");
-        [self.dialectBtn setTitle:(d.length ? [NSString stringWithFormat:@"方言：%@", d] : @"方言")
+        [self.dialectBtn setTitle:(d.length ? [NSString stringWithFormat:@"方言：%@", d] : @"无方言")
                          forState:UIControlStateNormal];
     }
     // ★ 2.8.7：千问的自定义指令写的是 qwenInstruction（对应官方 instructions 字段），
@@ -592,6 +592,17 @@
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"选方言"
         message:msg preferredStyle:UIAlertControllerStyleActionSheet];
     NSString *cur = MVGetStr(@"cosyDialect");
+    // ★ 2.8.27：顶部加「无」——用当前音色（克隆）原声，不加任何方言指令。
+    //   选了克隆音色但只想用克隆声、不想带方言时，点这个即可，不必再选一个方言。
+    NSString *noneTitle = (cur.length == 0) ? @"✓ 无（用当前音色原声）" : @"无（用当前音色原声）";
+    [ac addAction:[UIAlertAction actionWithTitle:noneTitle style:UIAlertActionStyleDefault
+        handler:^(UIAlertAction *a){
+            MVSetShared(@"cosyDialect", @"");
+            [self updateDialectButtons];
+            [MyVoiceCloud clearSynthesisCache];
+            [self prewarmNow];
+            [[MyVoiceManager shared] toast:@"已设为：无方言（用当前音色原声）"];
+        }]];
     for (NSString *d in ds) {
         NSString *title = [d isEqualToString:cur] ? [@"✓ " stringByAppendingString:d] : d;
         [ac addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault
