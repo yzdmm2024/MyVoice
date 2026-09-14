@@ -847,8 +847,10 @@ static void MVQQTryInstallHooks(void) {
         //   故自动发送 = 停止阶段也走和手动完全一致的 touchEnd:，QQ 内部正确停止并发送。
         @synchronized([MyVoiceDirectSend class]) {
             id view = g_mvQQPushToTalkView;
-            if (view && [view window] != nil &&
-                [view respondsToSelector:NSSelectorFromString(@"touchEnd:")]) {
+            // ★ 2.8.23：不检查 window —— 真机验证证明 touchEnd: 触停录音不依赖 window
+            //   （window 为 nil 的残留视图调 touchEnd: 仍触发 stopRecord），检查反而会在
+            //   录音中视图树短暂失效时漏调。只要视图实例在且响应 touchEnd: 就模拟松手。
+            if (view && [view respondsToSelector:NSSelectorFromString(@"touchEnd:")]) {
                 UITouch *t = [MyVoiceDirectSend mvSyntheticTouchOnView:view phase:UITouchPhaseEnded];
                 @try {
                     #pragma clang diagnostic push
@@ -861,8 +863,7 @@ static void MVQQTryInstallHooks(void) {
                     MVLog(@"[direct] QQ touchEnd: 异常 %@，退化底层兜底", e.reason);
                 }
             } else {
-                MVLog(@"[direct] QQ 停止：无可用 PushToTalkView（window=%@）",
-                      view ? ([view window] ? @"有" : @"无") : @"nil");
+                MVLog(@"[direct] QQ 停止：无可用 PushToTalkView（view=%@）", view ? @"有" : @"nil");
             }
         }
         // 兜底丝（已知 sendRecordData/onRecordEnd 不直接停录音，仅保险，正常情况下不走）
@@ -905,8 +906,8 @@ static void MVQQTryInstallHooks(void) {
         //   QQ 松手即发送、上滑才取消；自动模式下「停止」是首要诉求，故取消 = 模拟松手停止。
         @synchronized([MyVoiceDirectSend class]) {
             id view = g_mvQQPushToTalkView;
-            if (view && [view window] != nil &&
-                [view respondsToSelector:NSSelectorFromString(@"touchEnd:")]) {
+            // ★ 2.8.23：同上，不检查 window（验证证明 touchEnd: 触停不依赖 window）
+            if (view && [view respondsToSelector:NSSelectorFromString(@"touchEnd:")]) {
                 UITouch *to = [MyVoiceDirectSend mvSyntheticTouchOnView:view phase:UITouchPhaseEnded];
                 @try {
                     #pragma clang diagnostic push
