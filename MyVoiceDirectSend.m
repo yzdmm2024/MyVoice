@@ -409,7 +409,7 @@ static void MVQQTryInstallHooks(void) {
         }
         Class rec = NSClassFromString(@"QQPttRecorder");
         if (rec && !g_mvQQRecHookInstalled) {
-            MSHookMessageEx(rec, @selector(createRecorder), (IMP)MVQQCreateRecorderHook, (IMP *)&g_mvQQOrigQQCreateRec);
+            MSHookMessageEx(rec, @selector(createRecorder), (IMP)MVQQCreateRecorderHook, (IMP *)&g_mvOrigQQCreateRec);
             g_mvQQRecHookInstalled = YES;
             MVLog(@"[direct] QQ QQPttRecorder createRecorder 钩子已安装");
         }
