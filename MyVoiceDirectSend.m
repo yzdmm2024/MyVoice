@@ -21,7 +21,9 @@ extern void MSHookMessageEx(Class _class, SEL message, IMP hook, IMP *old);
 + (NSString*)stopWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc qqMode:(BOOL)qqMode;
 + (id)stashedQQOperator;
 + (id)stashedQQRecorder;
-+ (id)qqAutoOperator;
++ (id)qqAutoPressRecordButton:(BOOL*)outStarted;
++ (UITouch*)mvSyntheticTouchOnView:(UIView*)view phase:(UITouchPhase)phase;
++ (id)qqFindRecordButton;
 + (BOOL)qqAvailable;
 + (void)cancelWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc;
 @end
@@ -132,6 +134,18 @@ static id MVFindQQInstanceOfClasses(id obj, NSArray<NSString*>*clsNames, int dep
             c = class_getSuperclass(c); lvl++;
         }
     } @catch (NSException *e) { }
+    return nil;
+}
+
+// ★ 2.8.16：递归遍历 UIView 子树找 QQPttRecordBtn（按钮在视图层级里，不在 ivar 图里，
+//   所以 MVFindQQInstanceOfClasses 遍历不到，这里专门走 subviews）。
+static id MVFindQQRecordButtonInView(UIView *root, NSArray<NSString*>*names) {
+    if (!root) return nil;
+    if (MVClassMatches(object_getClass(root), names)) return root;
+    for (UIView *sub in root.subviews) {
+        id r = MVFindQQRecordButtonInView(sub, names);
+        if (r) return r;
+    }
     return nil;
 }
 
@@ -385,49 +399,75 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
 }
 + (id)stashedQQRecorder { @synchronized([MyVoiceDirectSend class]) { return g_mvQQRecorder; } }
 
-// ---- ★ 2.8.15：QQ 全自动直发（点「合成语音」无需先手动按住）----
-//   旧逻辑依赖「用户手动按住说话」时 didTriggeredRecord 钩子扣留的 Operator；
-//   没按住过时 stashedQQOperator 为空 → 只能退回手动。这里主动从当前聊天页对象图
-//   里把 PttRecordOperator 找出来，直接调 didTriggeredRecord 开始录音（与手动按住
-//   完全同链路：createRecorder 钩子照样扣留新 QQPttRecorder，TTS 照常喂入）。找不到则退回手动。
-+ (id)qqAutoOperator {
+// ---- ★ 2.8.16：QQ 全自动直发（点「合成语音」无需先手动按住）----
+//   根因：NTAIOPttRecordOperator 是用户【物理按住】「按住说话」按钮时由 QQ 自行创建的，
+//   从未按过时对象图里根本不存在，所以 2.8.15 的「从 VC 图里找 operator」永远找不到 → 退回手动。
+//   正确做法：直接【在 QQPttRecordBtn 上模拟一次按下】—— 这才是 operator 的真正创建入口，
+//   与手指按住完全同链路：didTriggeredRecord 创建 QQPttRecorder（createRecorder 钩子扣留）、
+//   AudioQueue 被 MyVoiceRecorder 劫持喂入 TTS，最后 stopRecord 收尾发送。
++ (id)qqFindRecordButton {
+    UIViewController *vc = nil;
+    @try { vc = [MyVoiceResolver currentChatVC]; } @catch (NSException *e) { vc = nil; }
+    if (!vc || !vc.view) { MVLog(@"[direct] QQ 自动：未找到当前聊天页 VC"); return nil; }
+    Class btnCls = NSClassFromString(@"QQPttRecordBtn");
+    NSArray *btnNames = btnCls ? @[NSStringFromClass(btnCls)] : @[];
+    if (!btnNames.count) { MVLog(@"[direct] QQ 自动：未找到 QQPttRecordBtn 类"); return nil; }
+    id found = MVFindQQRecordButtonInView(vc.view, btnNames);
+    if (found) MVLog(@"[direct] QQ 自动：找到录音按钮 %@", NSStringFromClass(object_getClass(found)));
+    else MVLog(@"[direct] QQ 自动：当前聊天页视图树内未找到 QQPttRecordBtn");
+    return found;
+}
+
+// 合成一个落在指定视图上的触摸（KVC 直写 UITouch 私有 ivar；不进系统事件分发，直接喂给视图的
+// touchesBegan:，从而触发按钮自身（或 UIControl）的按下逻辑，等价于手指按下）。
++ (UITouch*)mvSyntheticTouchOnView:(UIView*)view phase:(UITouchPhase)phase {
+    UIWindow *win = view.window;
+    if (!win) @try { win = [MyVoiceResolver anyWindow]; } @catch (NSException *e) { win = nil; }
+    UITouch *t = [[UITouch alloc] init];
+    [t setValue:view forKey:@"view"];
+    if (win) [t setValue:win forKey:@"window"];
+    [t setValue:@(phase) forKey:@"phase"];
+    [t setValue:@(1) forKey:@"tapCount"];
+    CGPoint c = CGPointMake(view.bounds.size.width / 2.0, view.bounds.size.height / 2.0);
+    CGPoint inWin = (win && [view respondsToSelector:@selector(convertPoint:toView:)])
+                   ? [view convertPoint:c toView:win] : c;
+    [t setValue:[NSValue valueWithCGPoint:inWin] forKey:@"_locationInWindow"];
+    [t setValue:[NSValue valueWithCGPoint:inWin] forKey:@"_previousLocationInWindow"];
+    [t setValue:[NSNumber numberWithDouble:[[NSProcessInfo processInfo] systemUptime]]
+          forKey:@"timestamp"];
+    return t;
+}
+
++ (id)qqAutoPressRecordButton:(BOOL*)outStarted {
+    if (outStarted) *outStarted = NO;
     @synchronized([MyVoiceDirectSend class]) {
         if (g_mvQQOperator) { MVLog(@"[direct] QQ 自动：复用已扣留 Operator"); return g_mvQQOperator; }
     }
-    Class opCls = NSClassFromString(@"NTAIOChat.NTAIOPttRecordOperator");
-    Class btnCls = NSClassFromString(@"QQPttRecordBtn");
-    NSArray *opNames = opCls ? @[NSStringFromClass(opCls)] : @[];
-    NSArray *btnNames = btnCls ? @[NSStringFromClass(btnCls)] : @[];
-    UIViewController *vc = nil;
-    @try { vc = [MyVoiceResolver currentChatVC]; } @catch (NSException *e) { vc = nil; }
-    if (!vc) { MVLog(@"[direct] QQ 自动：未找到当前聊天页 VC"); return nil; }
-    int g = 0;
-    // ① 直接在聊天页对象图里找 operator（不依赖按钮属性名，最稳）
-    if (opCls) {
-        id op = MVFindQQInstanceOfClasses(vc, opNames, 0, &g);
-        if (op) { MVLog(@"[direct] QQ 自动：VC 图内找到 Operator %@", NSStringFromClass(object_getClass(op))); return op; }
+    UIView *btn = [self qqFindRecordButton];
+    if (!btn) return nil;
+    // ★ 必须在「模拟按下」之前开喂入会话：recorder 的 AudioQueue 在 touchesBegan 内创建，
+    //   只有先 beginQueueBinding，该队列才会被登记进本次喂入集合（见 MyVoiceRecorder）。
+    [MyVoiceRecorder beginQueueBinding];
+    // ① 直接把 touchesBegan 喂给按钮（QQPttRecordBtn 重写该方法触发 didTriggeredRecord）
+    UITouch *t = [self mvSyntheticTouchOnView:btn phase:UITouchPhaseBegan];
+    UIEvent *e = [[UIEvent alloc] init];
+    [e setValue:[NSSet setWithObject:t] forKey:@"_touches"];
+    @try { [btn touchesBegan:[NSSet setWithObject:t] withEvent:e]; }
+    @catch (NSException *ex) { MVLog(@"[direct] QQ 自动：touchesBegan 抛异常 %@", ex.reason); }
+    id op = [MyVoiceDirectSend stashedQQOperator];
+    if (op) { if (outStarted) *outStarted = YES; return op; }
+    // ② 兜底：若按钮是 UIControl 且用 control-event 触发录制，补一发 TouchDown
+    if ([btn isKindOfClass:[UIControl class]]) {
+        @try { [(UIControl*)btn sendActionsForControlEvents:UIControlEventTouchDown]; }
+        @catch (NSException *ex) { MVLog(@"[direct] QQ 自动：sendActions 抛异常 %@", ex.reason); }
+        op = [MyVoiceDirectSend stashedQQOperator];
+        if (op) { if (outStarted) *outStarted = YES; return op; }
     }
-    // ② 找录音按钮，再读其 operator 属性
-    NSArray *btnProps = @[@"m_operator", @"operator", @"recordOperator",
-                           @"pptRecordOperator", @"_operator", @"m_recordOperator", @"delegate"];
-    id btn = btnCls ? MVFindQQInstanceOfClasses(vc, btnNames, 0, &g) : nil;
-    if (!btn && vc.view) btn = MVFindQQInstanceOfClasses(vc.view, btnNames, 0, &g);
-    if (btn) {
-        MVLog(@"[direct] QQ 自动：找到录音按钮 %@", NSStringFromClass(object_getClass(btn)));
-        for (NSString *k in btnProps) {
-            id op = [MyVoiceResolver valueForIvars:btn names:@[k]];
-            if (op && (!opCls || MVClassMatches(object_getClass(op), opNames))) {
-                MVLog(@"[direct] QQ 自动：按钮属性 %@ → Operator", k);
-                return op;
-            }
-        }
-        if (opCls) {
-            int g2 = 0;
-            id op = MVFindQQInstanceOfClasses(btn, opNames, 0, &g2);
-            if (op) { MVLog(@"[direct] QQ 自动：按钮子图找到 Operator"); return op; }
-        }
-    }
-    MVLog(@"[direct] QQ 自动：未能定位 Operator（将退回手动按住）");
+    MVLog(@"[direct] QQ 自动：模拟按下仍未创建 Operator（该 QQ 版本可能不认合成触摸）");
+    @try {   // 收尾：把这次未生效的触摸取消，避免按钮内部状态悬挂
+        [t setValue:@(UITouchPhaseCancelled) forKey:@"phase"];
+        [btn touchesCancelled:[NSSet setWithObject:t] withEvent:e];
+    } @catch (NSException *ex) { }
     return nil;
 }
 
@@ -494,27 +534,40 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
     id rc = [MyVoiceDirectSend recordController];
     id as = [MyVoiceDirectSend audioSender];
 
+    // ★ 2.8.16：开喂入会话必须【早于】「模拟按下 / 调启动方法」—— recorder 的 AudioQueue
+    //   在按下瞬间创建（见 qqAutoPressRecordButton），只有先 beginQueueBinding，它才会被
+    //   登记进本次喂入集合，TTS 才能注入（否则 fedBytes 始终为 0 → 1.2s 超时退回手动）。
+    [MyVoiceRecorder beginQueueBinding];
+
     // ---- 选启动入口：★ 2.5.1 QQ 走自己的 PttRecorderManager；微信优先 RecordController ----
     id target = nil; NSString *startSel = nil; id stopTarget = nil; BOOL stopIsSender = NO;
+    BOOL qqAlreadyStarted = NO;   // ★ 2.8.16：自动模拟按下已触发 didTriggeredRecord，勿重复调
 
     if (qqMode) {
         // ★ 2.5.2：必须用聊天页自己的实例（有 delegate 才会发送）。
         //   自己 alloc 的裸实例录音正常但 QQ 不发（真机实测）。
         // ★ 2.6.0：操作器由用户在该聊天按住说话键时扣留（didTriggeredRecord 钩子）。
+        // ★ 2.8.16：若「合成语音」前从未手动按住，这里直接【模拟按下「按住说话」按钮】
+        //   触发 didTriggeredRecord（与手指按住同链路，新建 QQPttRecorder 被钩子扣留、TTS 照常喂入），
+        //   随后 stopRecord 完成发送，全程无需手指。
         target = [MyVoiceDirectSend stashedQQOperator];
         if (!target) {
-            // ★ 2.8.15：点合成语音时若尚未手动按住，主动定位当前聊天的 PttRecordOperator 并触发录音
-            target = [MyVoiceDirectSend qqAutoOperator];
+            target = [MyVoiceDirectSend qqAutoPressRecordButton:&qqAlreadyStarted];
         }
         if (!target) {
-            // ★ 2.6.2：TTS 装填保持有效 —— 用户随后手动按住说话，队列照样被喂 TTS
-            MVLog(@"[direct] QQ：尚无激活的 Operator —— 保持装填，等待手动按住");
-                [MyVoiceDirectSend beginQQAutoStopWatch];
+            // 模拟按下仍未创建 Operator（极少数 QQ 版本不认合成触摸）→ 退回手动
+            MVLog(@"[direct] QQ：模拟按下仍未创建 Operator —— 保持装填，等待手动按住");
+            [MyVoiceDirectSend beginQQAutoStopWatch];
             fin(NO, @"语音已就绪：请现在按住「按住 说话」，松开即发出（2 分钟内有效）");
             return;
         }
-        startSel = @"didTriggeredRecord";
-        MVLog(@"[direct] QQ 模式：复用 PttRecordOperator %p，结束后对新 QQPttRecorder stopRecord", target);
+        if (qqAlreadyStarted) {
+            startSel = nil;   // didTriggeredRecord 已在模拟按下时触发，勿重复
+        } else {
+            startSel = @"didTriggeredRecord";
+        }
+        MVLog(@"[direct] QQ 模式：%@ PttRecordOperator %p，结束后对新 QQPttRecorder stopRecord",
+              qqAlreadyStarted ? @"模拟按下创建" : @"复用已扣留", target);
     }
 
     if (qqMode) {
@@ -546,8 +599,6 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
     // ★ 2.2.5：先声明「接下来新建的录音队列才是本次替换目标」，再调启动方法。
     //   顺序不能反 —— 队列是启动方法内部创建的，先声明才能精确绑定；
     //   不绑定的话，同时存在的第二个输入队列也会被喂同一段 TTS → 两个声音/重音。
-    [MyVoiceRecorder beginQueueBinding];
-
     MVInvoke(target, startSel, @[me, talker ?: @"", [NSNull null]]);
 
     // ---- 轮询：等「TTS 真正喂完」（fedDone）再松手 ----
