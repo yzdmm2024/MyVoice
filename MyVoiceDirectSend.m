@@ -379,7 +379,7 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
                     dispatch_async(dispatch_get_main_queue(), ^{
                         id rec = [MyVoiceDirectSend stashedQQRecorder];
                         if (rec) {
-                            MVInvoke(rec, @"stopRecord", nil);
+                            [MyVoiceDirectSend mvQQSendRecorder:rec];
                             [[MyVoiceManager shared] toast:@"✅ 语音已发出，可以松手了"];
                             AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
                             if (@available(iOS 10.0, *)) {
@@ -400,12 +400,105 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
 }
 + (id)stashedQQRecorder { @synchronized([MyVoiceDirectSend class]) { return g_mvQQRecorder; } }
 
-// ---- ★ 2.8.16：QQ 全自动直发（点「合成语音」无需先手动按住）----
-//   根因：NTAIOPttRecordOperator 是用户【物理按住】「按住说话」按钮时由 QQ 自行创建的，
-//   从未按过时对象图里根本不存在，所以 2.8.15 的「从 VC 图里找 operator」永远找不到 → 退回手动。
-//   正确做法：直接【在 QQPttRecordBtn 上模拟一次按下】—— 这才是 operator 的真正创建入口，
-//   与手指按住完全同链路：didTriggeredRecord 创建 QQPttRecorder（createRecorder 钩子扣留）、
-//   AudioQueue 被 MyVoiceRecorder 劫持喂入 TTS，最后 stopRecord 收尾发送。
+// ---- ★ 2.8.18：QQ 全自动直发（点「合成语音」无需手动按住）----
+//   实机 frida 全链路确认的真链路（2.8.15~2.8.17 失败根因：① 键盘模式硬找 QQPttRecordBtn
+//   找不到 → 永远退回手动；② 旧版用 stopRecord 收尾，但真链发送方法是 sendRecordData）。
+//     开始：QQPushToTalkView -startRecordAsync → QQPttRecordOperator -didStartRecordAsync:
+//            → NTAIOChat.NTAIOPttRecordOperator -didTriggeredRecord（钩子扣留 Operator）
+//            → QQPttRecorder +createRecorder（钩子扣留 Recorder）→ AudioQueue 被 MyVoiceRecorder 劫持喂入 TTS
+//     发送：QQPttRecorder -sendRecordData（无参）→ QQPttRecordOperator -onRecordEnd:send:(send=YES)
+//            → NTAIOChat.NTAIOPttRecordOperator -sendAudioWithAudioModel:completion:（真发）
+//   故「自动发送」= 直接调 startRecordAsync 开始 + 喂完 TTS 后调 sendRecordData 发送，零手动。
++ (id)mvQQFindPushToTalkView {
+    UIViewController *vc = nil;
+    @try { vc = [MyVoiceResolver currentChatVC]; } @catch (NSException *e) { vc = nil; }
+    if (!vc || !vc.view) return nil;
+    Class vcls = NSClassFromString(@"QQPushToTalkView");
+    if (!vcls) { MVLog(@"[direct] QQ 自动：未找到 QQPushToTalkView 类"); return nil; }
+    __block id found = nil;
+    void (^walk)(UIView*) = ^(UIView *root){
+        if (found) return;
+        if ([root isKindOfClass:vcls]) { found = root; return; }
+        for (UIView *sub in root.subviews) walk(sub);
+    };
+    walk(vc.view);
+    if (found) MVLog(@"[direct] QQ 自动：找到 QQPushToTalkView %p", found);
+    else { MVLog(@"[direct] QQ 自动：当前非语音模式（无 QQPushToTalkView）"); MVDebugDumpInputTree(vc.view); }
+    return found;
+}
+
+// 尽力切到语音模式（让「按住说话」/QQPushToTalkView 出现）。找输入栏里类含 voice/record/ptt/switch 的
+// UIButton 触发一次 TouchUpInside。找不到返回 NO。
++ (BOOL)mvQQSwitchToVoiceMode {
+    UIViewController *vc = nil;
+    @try { vc = [MyVoiceResolver currentChatVC]; } @catch (NSException *e) { vc = nil; }
+    if (!vc || !vc.view) return NO;
+    __block UIButton *toggle = nil;
+    void (^walk)(UIView*) = ^(UIView *root){
+        if (toggle) return;
+        if ([root isKindOfClass:[UIButton class]]) {
+            NSString *cn = NSStringFromClass(object_getClass(root)) ?: @"";
+            if ([cn rangeOfString:@"voice"  options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                [cn rangeOfString:@"record" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                [cn rangeOfString:@"ptt"    options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                [cn rangeOfString:@"switch" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                toggle = (UIButton*)root; return;
+            }
+        }
+        for (UIView *sub in root.subviews) walk(sub);
+    };
+    walk(vc.view);
+    if (toggle) {
+        @try { [toggle sendActionsForControlEvents:UIControlEventTouchUpInside]; MVLog(@"[direct] QQ 自动：已触发语音模式切换按钮"); return YES; }
+        @catch (NSException *e) { MVLog(@"[direct] QQ 自动：切语音模式异常 %@", e.reason); }
+    }
+    return NO;
+}
+
+// 自动开始录音：优先 QQPushToTalkView.startRecordAsync（真链路入口，零手动）；
+// 键盘模式先尽力切语音模式再试；都失败退回旧版「合成触摸按钮」兜底。
++ (id)qqAutoStartRecord:(BOOL*)outStarted {
+    if (outStarted) *outStarted = NO;
+    id view = [self mvQQFindPushToTalkView];
+    if (!view && [self mvQQSwitchToVoiceMode]) {
+        for (int i = 0; i < 10 && !view; i++) { usleep(100 * 1000); view = [self mvQQFindPushToTalkView]; }
+    }
+    if (view) {
+        [MyVoiceRecorder beginQueueBinding];
+        SEL sel = NSSelectorFromString(@"startRecordAsync");
+        if ([view respondsToSelector:sel]) {
+            @try {
+                #pragma clang diagnostic push
+                #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                [view performSelector:sel];
+                #pragma clang diagnostic pop
+                id op = [MyVoiceDirectSend stashedQQOperator];
+                if (!op) { usleep(50 * 1000); op = [MyVoiceDirectSend stashedQQOperator]; }
+                if (op) { if (outStarted) *outStarted = YES; MVLog(@"[direct] QQ 自动：startRecordAsync 已触发 Operator=%p", op); return op; }
+            } @catch (NSException *e) { MVLog(@"[direct] QQ 自动：startRecordAsync 异常 %@", e.reason); }
+        }
+    }
+    MVLog(@"[direct] QQ 自动：无 startRecordAsync 路径，退回合成触摸按钮方案");
+    return [self qqAutoPressRecordButton:outStarted];
+}
+
+// 结束并发送：真链是 QQPttRecorder -sendRecordData（无参）。退化 stopRecord。
++ (void)mvQQSendRecorder:(id)rec {
+    if (!rec) return;
+    SEL sel = NSSelectorFromString(@"sendRecordData");
+    if ([rec respondsToSelector:sel]) {
+        @try {
+            #pragma clang diagnostic push
+            #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [rec performSelector:sel];
+            #pragma clang diagnostic pop
+            MVLog(@"[direct] QQ 自动：已调 sendRecordData 发送");
+            return;
+        } @catch (NSException *e) { MVLog(@"[direct] QQ 自动：sendRecordData 异常，退化 stopRecord：%@", e.reason); }
+    }
+    MVInvoke(rec, @"stopRecord", nil);
+}
+
 + (id)qqFindRecordButton {
     UIViewController *vc = nil;
     @try { vc = [MyVoiceResolver currentChatVC]; } @catch (NSException *e) { vc = nil; }
@@ -555,30 +648,18 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
     BOOL qqAlreadyStarted = NO;   // ★ 2.8.16：自动模拟按下已触发 didTriggeredRecord，勿重复调
 
     if (qqMode) {
-        // ★ 2.5.2：必须用聊天页自己的实例（有 delegate 才会发送）。
-        //   自己 alloc 的裸实例录音正常但 QQ 不发（真机实测）。
-        // ★ 2.6.0：操作器由用户在该聊天按住说话键时扣留（didTriggeredRecord 钩子）。
-        // ★ 2.8.16：若「合成语音」前从未手动按住，这里直接【模拟按下「按住说话」按钮】
-        //   触发 didTriggeredRecord（与手指按住同链路，新建 QQPttRecorder 被钩子扣留、TTS 照常喂入），
-        //   随后 stopRecord 完成发送，全程无需手指。
-        target = [MyVoiceDirectSend stashedQQOperator];
+        // ★ 2.8.18：直接 startRecordAsync 开始（真链路入口，零手动）。
+        //   随后 fedDone 后由 stopWith 调 sendRecordData 发送。开始绝不再调 didTriggeredRecord（会重复触发）。
+        target = [MyVoiceDirectSend qqAutoStartRecord:&qqAlreadyStarted];
         if (!target) {
-            target = [MyVoiceDirectSend qqAutoPressRecordButton:&qqAlreadyStarted];
-        }
-        if (!target) {
-            // 模拟按下仍未创建 Operator（极少数 QQ 版本不认合成触摸）→ 退回手动
-            MVLog(@"[direct] QQ：模拟按下仍未创建 Operator —— 保持装填，等待手动按住");
+            MVLog(@"[direct] QQ：无法自动开始录音 —— 保持装填，等待手动按住");
             [MyVoiceDirectSend beginQQAutoStopWatch];
             fin(NO, @"语音已就绪：请现在按住「按住 说话」，松开即发出（2 分钟内有效）");
             return;
         }
-        if (qqAlreadyStarted) {
-            startSel = nil;   // didTriggeredRecord 已在模拟按下时触发，勿重复
-        } else {
-            startSel = @"didTriggeredRecord";
-        }
-        MVLog(@"[direct] QQ 模式：%@ PttRecordOperator %p，结束后对新 QQPttRecorder stopRecord",
-              qqAlreadyStarted ? @"模拟按下创建" : @"复用已扣留", target);
+        startSel = nil;   // 开始已由 qqAutoStartRecord 内的 startRecordAsync 完成，勿重复触发
+        MVLog(@"[direct] QQ 模式：%@ PttRecordOperator %p，喂完 TTS 后对新 QQPttRecorder sendRecordData 发送",
+              qqAlreadyStarted ? @"startRecordAsync 创建" : @"复用", target);
     }
 
     if (qqMode) {
@@ -663,11 +744,11 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
 // 停止并发送：优先无参 StopRecord（AudioSender）；退化到 RecordController 的停止方法
 + (NSString*)stopWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc qqMode:(BOOL)qqMode {
     if (qqMode) {
-        // ★ 2.6.0：结束本次录音（didTriggeredRecord 新建的 QQPpttRecorder，钩子已扣留）
+        // ★ 2.8.18：真链发送方法是 sendRecordData（无参）；退化 stopRecord。
         id rec = [MyVoiceDirectSend stashedQQRecorder];
         if (rec) {
-            MVInvoke(rec, @"stopRecord", nil);
-            return @"QQ QQPttRecorder -stopRecord";
+            [MyVoiceDirectSend mvQQSendRecorder:rec];
+            return @"QQ QQPttRecorder -sendRecordData";
         }
         MVLog(@"[direct] ⚠️ QQ 停止时找不到 QQPttRecorder 实例");
         return @"(无)";

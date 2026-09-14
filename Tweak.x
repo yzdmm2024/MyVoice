@@ -71,7 +71,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.8.17（真机抓包诊断版：仅增强 [mvdiag] 日志，不改发送行为）");
+        MVLog(@"载入 我的语音 v2.8.18（QQ 全自动发送：实机 frida 抓包确认真链路，点合成语音直接 startRecordAsync 开始 + sendRecordData 发送，无需手动按住）");
         MVLog(@"宿主 App：%@（版本 %@）",
               [NSBundle mainBundle].bundleIdentifier ?: @"?",
               [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");
@@ -90,12 +90,12 @@
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ [MyVoiceManager setupWhenHostReady]; });
 
-    // ④ 2.8.17 真机抓包：QQ 内枚举相关类（仅打印，不改行为）
+    // ④ 2.8.18：QQ 内仍枚举相关类（仅打印，便于排障），实际发送已改走真链路
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         if (mvDiagIsQQ()) {
             mvDiagDumpClasses();
-            MVLog(@"[mvdiag] 抓包就绪：请手动按住「按住说话」2秒再松开，然后点「合成语音」自动发送");
+            MVLog(@"[mvdiag] 诊断就绪：点「合成语音」即自动开始并发送（无需手动按住）");
         }
     });
 
