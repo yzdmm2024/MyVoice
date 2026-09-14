@@ -3,6 +3,8 @@
 #import "MyVoiceResolver.h"
 #import "MyVoiceSender.h"
 #import "MyVoicePanel.h"
+#import "MyVoiceDirectSend.h"
+#import "MyVoiceDiag.h"
 #import <UIKit/UIKit.h>
 
 @implementation MyVoiceManager
@@ -70,6 +72,14 @@ static void MVSettingsChanged(CFNotificationCenterRef center, void *observer,
 
 - (void)handleSendText:(NSString*)text {
     if (!MVEnabled()) { MVLog(@"未启用"); return; }
+    // ★ 2.8.25：抖音进程里不走微信式发送（抖音无 wxid、无法程序化 startRecord）。
+    //   点「合成语音」= 授权本次抖音 TTS 接管，引导用户去抖音长按语音键（半自动替换）。
+    if (mvDiagIsDouyin()) {
+        NSString *vid = (MVTTSProvider() == 1) ? MVQwenVoice() : MVCurrentVoiceID();
+        [MyVoiceDirectSend mvDouyinArmWithText:text voice:vid];
+        [[MyVoiceManager shared] toast:@"抖音 TTS 已就绪：去聊天页长按语音键，将自动发出 TTS"];
+        return;
+    }
     // 聊天对象：currentTalker 内部已经把「聊天页实时解析 → hook 捕获 → 落盘」串起来了。
     // ★ 2.3.0：识别不到 wxid 不再一票否决 —— 用户就在聊天页里时照样继续（发给谁由
     //   当前聊天页的录音上下文决定，Sender/DirectSend 会在启动录音前再解析一次）。
@@ -87,6 +97,12 @@ static void MVSettingsChanged(CFNotificationCenterRef center, void *observer,
 
 // 面板顶部显示的一行状态：一眼看出「现在会发给谁」
 - (NSString*)talkerStatus {
+    // ★ 2.8.25：抖音进程不显示误导性的「未识别（wxid）」，改为抖音 TTS 接管状态
+    if (mvDiagIsDouyin()) {
+        return [MyVoiceDirectSend mvDouyinArmed] ?
+            @"抖音 TTS：已就绪（去长按语音键发送）" :
+            @"抖音：点「合成语音」开启 TTS 接管";
+    }
     NSString *t = [MyVoiceResolver currentTalker];
     if (t.length) {
         NSString *short_ = t.length > 18 ? [NSString stringWithFormat:@"…%@", [t substringFromIndex:t.length - 16]] : t;

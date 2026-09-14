@@ -43,6 +43,12 @@
 // ★ 2.8.24：tweak 启动即挂抖音半自动直发钩子（startRecord/record/sendRecordMessage…，带类加载重试）。
 + (void)installDouyinHooksIfNeeded;
 
+// ★ 2.8.25：抖音「arming」门控。用户在抖音进程点面板「合成语音」= 授权本次抖音 TTS 接管
+//   （仅该次长按替换，发完即失效），避免全局 lastComposedText 残留导致每次抖音长按都被劫持。
++ (void)mvDouyinArmWithText:(NSString*)text voice:(NSString*)voice;
++ (void)mvDouyinDisarm;
++ (BOOL)mvDouyinArmed;
+
 // 无界面直发：TTS 必须已经装填进录音管线（MyVoiceRecorder feedPCM:）。
 // 直接调微信内部接口开始录音 → 轮询确认录音真的被接管 → 到时长后停止并发送。
 // completion(ok, reason)：ok=NO 时调用方应回退成「手动按住说话」提示。

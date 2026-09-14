@@ -700,6 +700,7 @@ static BOOL g_mvDouyinTTSReady   = NO;    // m4a 已就绪
 static NSString *g_mvDouyinTTSPath = nil; // 合成好的 TTS m4a 路径
 static NSTimeInterval g_mvDouyinPressStart = 0;
 static id  g_mvDouyinRecorder    = nil;
+static BOOL g_mvDouyinArmed      = NO;    // ★ 2.8.25：仅「点面板合成」授权后才接管，避免全局残留劫持
 
 static IMP g_mvOrigDYStart = NULL;
 static IMP g_mvOrigDYRecord = NULL;
@@ -710,21 +711,26 @@ static BOOL g_mvDYSendHookInstalled  = NO;
 static BOOL g_mvDYRetryScheduled      = NO;
 
 static void MVDYStartHook(id self, SEL _cmd) {
-    // 仅当用户已在 MyVoice 面板准备了文本才走 TTS 替换，否则抖音正常录音
-    NSString *text = [[MyVoiceCloud shared] lastComposedText];
-    BOOL wants = (text.length > 0);
+    // ★ 2.8.25：抖音 TTS 接管需用户显式授权（面板点「合成语音」设 g_mvDouyinArmed），
+    //   不再依赖全局 lastComposedText 残留 —— 否则抖音每次长按都会被劫持、发普通语音也不行。
+    BOOL armed = NO;
+    @synchronized([MyVoiceDirectSend class]) { armed = g_mvDouyinArmed; }
+    if (g_mvOrigDYStart) ((void(*)(id,SEL))g_mvOrigDYStart)(self, _cmd);
+    if (!armed) return;   // 未授权：抖音完全正常的录音，MyVoice 不插手
+    NSString *text  = [[NSUserDefaults standardUserDefaults] stringForKey:@"mv_douyin_text"];
+    NSString *voice = [[NSUserDefaults standardUserDefaults] stringForKey:@"mv_douyin_voice"];
+    if (!text.length) { MVLog(@"[direct] 抖音：armed 但无待发文本，跳过"); return; }
     @synchronized([MyVoiceDirectSend class]) {
         g_mvDouyinTouchView = self;
-        g_mvDouyinActive    = wants;
+        g_mvDouyinActive    = YES;
         g_mvDouyinTTSReady  = NO;
         g_mvDouyinTTSPath   = nil;
         g_mvDouyinPressStart = [[NSDate date] timeIntervalSince1970];
     }
-    if (g_mvOrigDYStart) ((void(*)(id,SEL))g_mvOrigDYStart)(self, _cmd);
-    if (wants) {
-        MVLog(@"[direct] 抖音：检测到按住（已备文本『%@』），启动 TTS 替换流程", text);
-        [MyVoiceDirectSend mvDouyinBeginTTS:text voice:[[MyVoiceCloud shared] lastComposedVoice]];
-    }
+    MVLog(@"[direct] 抖音：armed 命中，后台合成 TTS（『%@』），等待用户松手替换", text);
+    [MyVoiceDirectSend mvDouyinBeginTTS:text voice:voice];
+    // ★ 注意：合成完后【不】自动松手 —— 抖音完全半自动，松手时机由用户掌控，
+    //   杜绝「自己就中断了 / 停不下来」。用户松手 → 抖音 stop → send 钩替换文件。
 }
 
 static void MVDYRecordHook(id self, SEL _cmd) {
@@ -751,6 +757,8 @@ static void MVDYSendHook(id self, SEL _cmd, id path, id recorder) {
                 } @catch (NSException *e) { MVLog(@"[direct] 抖音：覆盖文件异常 %@", e.reason); }
             }
             g_mvDouyinActive = NO;  // 消费本次替换
+            // ★ 2.8.25：发完即 disarm，下次发 TTS 需重新点面板「合成语音」，避免误发
+            [[MyVoiceDirectSend class] mvDouyinDisarm];
         }
     }
     if (g_mvOrigDYSend) ((void(*)(id,SEL,id,id))g_mvOrigDYSend)(self, _cmd, path, recorder);
@@ -784,14 +792,47 @@ static void MVDYTryInstallHooks(void) {
     NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
     if ([bid rangeOfString:@"aweme" options:NSCaseInsensitiveSearch].location != NSNotFound &&
         NSClassFromString(@"AWEIMOptimizeAudioInputTouchView") != nil) {
+        // ★ 2.8.25：tweak 启动即从 NSUserDefaults 恢复 armed 状态（跨重启保留用户的抖音 TTS 授权）
+        @synchronized([MyVoiceDirectSend class]) {
+            g_mvDouyinArmed = [[NSUserDefaults standardUserDefaults] boolForKey:@"mv_douyin_armed"];
+        }
         [self installDouyinHooksIfNeeded];
         return YES;
     }
     return NO;
 }
 
+// ★ 2.8.25：抖音 TTS 接管授权（面板点「合成语音」时调用）。仅本次 armed 的长按会替换内容，
+//   发完即 disarm。text/voice 落盘，供 startRecord 钩后台合成使用。
++ (void)mvDouyinArmWithText:(NSString*)text voice:(NSString*)voice {
+    if (!text.length) return;
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    [ud setObject:text forKey:@"mv_douyin_text"];
+    if (voice.length) [ud setObject:voice forKey:@"mv_douyin_voice"];
+    [ud setBool:YES forKey:@"mv_douyin_armed"];
+    [ud synchronize];
+    @synchronized([MyVoiceDirectSend class]) { g_mvDouyinArmed = YES; }
+    MVLog(@"[direct] 抖音：已 armed TTS 接管（text=%@），去抖音长按语音键发送", text);
+}
+
++ (void)mvDouyinDisarm {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    [ud setBool:NO forKey:@"mv_douyin_armed"];
+    [ud synchronize];
+    @synchronized([MyVoiceDirectSend class]) { g_mvDouyinArmed = NO; }
+}
+
++ (BOOL)mvDouyinArmed {
+    @synchronized([MyVoiceDirectSend class]) { return g_mvDouyinArmed; }
+    return NO;
+}
+
 + (void)installDouyinHooksIfNeeded {
     if (!mvDiagIsDouyin()) return;
+    // ★ 2.8.25：从 NSUserDefaults 恢复 armed（跨重启保留用户授权），Tweak.x 走此入口
+    @synchronized([MyVoiceDirectSend class]) {
+        g_mvDouyinArmed = [[NSUserDefaults standardUserDefaults] boolForKey:@"mv_douyin_armed"];
+    }
     MVDYTryInstallHooks();
     if (g_mvDYStartHookInstalled && g_mvDYRecHookInstalled && g_mvDYSendHookInstalled) return;
     if (g_mvDYRetryScheduled) return;
@@ -814,12 +855,9 @@ static void MVDYTryInstallHooks(void) {
         NSString *m4a = [self mvEncodePCMToM4A:pcm];
         if (!m4a) { MVLog(@"[direct] 抖音 m4a 编码失败"); return; }
         @synchronized([MyVoiceDirectSend class]) { g_mvDouyinTTSPath = m4a; g_mvDouyinTTSReady = YES; }
-        MVLog(@"[direct] 抖音 TTS 就绪 m4a=%@ (≈%.2fs)", m4a, pcm.length / 32000.0);
-        // 仿真实松手：确保最短按住 0.8s，避免「太短」被丢弃
-        NSTimeInterval el = [[NSDate date] timeIntervalSince1970] - g_mvDouyinPressStart;
-        double wait = MAX(0, 0.8 - el);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ [self mvDouyinAutoRelease]; });
+        MVLog(@"[direct] 抖音 TTS 就绪 m4a=%@ (≈%.2fs) —— 等待用户松手即替换", m4a, pcm.length / 32000.0);
+        // ★ 2.8.25：不再自动松手。自行决定是否松手由用户掌控（半自动），避免「自己中断 / 停不下来」。
+        //   若用户松手早于 TTS 就绪：send 钩时 m4a 未就位 → 不替换 → 发原生录音（安全降级）。
     }];
 }
 
