@@ -12,6 +12,13 @@ BOOL mvDiagIsQQ(void) {
     return [bid rangeOfString:@"tencent.mqq"].location != NSNotFound;
 }
 
+// ★ 2.8.24：抖音（Aweme）进程判断。bundle id = com.ss.iphone.ugc.Aweme。
+BOOL mvDiagIsDouyin(void) {
+    NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
+    return [bid rangeOfString:@"aweme" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+           [bid rangeOfString:@"ugc.iphone" options:NSCaseInsensitiveSearch].location != NSNotFound;
+}
+
 // 枚举 QQ 里所有"看着像录音/语音/按住说话"的类，并打印最相关类的方法签名
 void mvDiagDumpClasses(void) {
     int count = objc_getClassList(NULL, 0);

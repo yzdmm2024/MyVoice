@@ -1,5 +1,5 @@
 {
   Filter = {
-    Bundles = ( "com.tencent.xin", "com.tencent.mqq" );
+    Bundles = ( "com.tencent.xin", "com.tencent.mqq", "com.ss.iphone.ugc.Aweme" );
   };
 }

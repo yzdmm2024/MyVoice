@@ -21,6 +21,12 @@
 //   已缓存 / 离线引擎 / 没配 Key 时直接返回，绝不打扰用户。
 - (void)prewarmText:(NSString*)text voiceID:(NSString*)voiceID;
 
+// ★ 2.8.24：抖音半自动直发取用——记录面板「最近准备发送」的文本/音色。
+//   用户在 MyVoice 面板里打字/选音色时 prewarm 会带这两个参数进来，我们留存，
+//   用户去抖音按住说话时直接拿来合成 TTS、替换录音文件。无内容时抖音走正常录音。
+- (NSString*)lastComposedText;
+- (NSString*)lastComposedVoice;
+
 // ★ 2.2.7 连接预热：提前建好 DNS+TLS（实测首次合成 0.89s 里约 0.3~0.4s 花在握手上）。
 //   幂等：默认 5 分钟内只暖一次。打开面板时调一次即可。
 - (void)prewarmConnection;

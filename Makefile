@@ -11,7 +11,7 @@ MyVoice_FILES := Tweak.x MyVoiceManager.m MyVoiceResolver.m MyVoiceEngine.m \
                  MyVoiceRecorder.m MyVoiceDirectSend.m MyVoiceCloud.m MyVoiceCloneController.m \
                  MyVoiceLicense.m MyVoiceDiag.m
 MyVoice_FILES += MyVoiceSilk.c $(wildcard silk/src/*.c)
-MyVoice_FRAMEWORKS := Foundation UIKit AVFoundation Security AudioToolbox
+MyVoice_FRAMEWORKS := Foundation UIKit AVFoundation CoreMedia Security AudioToolbox
 MyVoice_CFLAGS := -fobjc-arc -Wno-error -Wno-deprecated-declarations
 MyVoice_CFLAGS += -Isilk/interface -Isilk/src
 

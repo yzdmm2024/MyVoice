@@ -3,6 +3,11 @@
 #import <AVFoundation/AVFoundation.h>
 #import <CommonCrypto/CommonCrypto.h>
 
+@interface MyVoiceCloud ()
+@property (nonatomic, copy) NSString *lastDouyinText;   // ★ 2.8.24：面板最近准备发送的文本
+@property (nonatomic, copy) NSString *lastDouyinVoice;  // ★ 2.8.24：面板最近准备发送的音色
+@end
+
 // ---- HTTP 辅助 ----
 static NSError* MVErr(NSString *msg) {
     return [NSError errorWithDomain:@"MyVoiceCloud" code:-1 userInfo:@{NSLocalizedDescriptionKey:msg}];
@@ -179,6 +184,9 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
 #pragma mark - ★ 2.2.7 预合成 / 连接预热
 
 - (void)prewarmText:(NSString*)text voiceID:(NSString*)voiceID {
+    // ★ 2.8.24：留存「最近准备发送」的文本/音色，供抖音半自动直发取用。
+    if (text.length) self.lastDouyinText = text;
+    if (voiceID.length) self.lastDouyinVoice = voiceID;
     if (!text.length || text.length > 300) return;
     if (MVEngineMode() != 1) return;                       // 离线引擎不吃网络，预合成没意义
     if (!MVAPIKey().length)  return;                        // 没配 Key：交给发送路径去明确报错
@@ -194,6 +202,10 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
                               err.localizedDescription ?: @"未知");
     }];
 }
+
+// ★ 2.8.24：抖音半自动直发取用——面板「最近准备发送」的文本/音色。
+- (NSString*)lastComposedText  { return self.lastDouyinText ?: @""; }
+- (NSString*)lastComposedVoice { return self.lastDouyinVoice ?: @""; }
 
 // 只建立 TCP+TLS，不做真实合成（用"参数不完整"的旧接口：鉴权在参数校验前执行 → 400，
 // 不消耗额度、无副作用，但连接与 DNS 已经热了）。

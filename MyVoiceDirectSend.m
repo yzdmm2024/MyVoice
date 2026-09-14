@@ -7,6 +7,8 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import "MyVoiceDiag.h"
+#import <AVFoundation/AVFoundation.h>
+#import <CoreMedia/CoreMedia.h>
 
 // Substrate / ellekit 均提供（同 MSHookFunction）
 extern void MSHookMessageEx(Class _class, SEL message, IMP hook, IMP *old);
@@ -27,6 +29,12 @@ extern void MSHookMessageEx(Class _class, SEL message, IMP hook, IMP *old);
 + (id)qqFindRecordButton;
 + (BOOL)qqAvailable;
 + (void)cancelWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc;
+// ★ 2.8.24 抖音半自动直发
++ (BOOL)douyinAvailable;
++ (void)installDouyinHooksIfNeeded;
++ (void)mvDouyinBeginTTS:(NSString*)text voice:(NSString*)voice;
++ (void)mvDouyinAutoRelease;
++ (NSString*)mvEncodePCMToM4A:(NSData*)pcm;
 @end
 
 // ============================================================
@@ -667,6 +675,234 @@ static void MVQQTryInstallHooks(void) {
         [btn touchesCancelled:[NSSet setWithObject:t] withEvent:e];
     } @catch (NSException *ex) { }
     return nil;
+}
+
+#pragma mark - ★ 2.8.24 抖音半自动直发（文件替换法）
+
+// 链路（frida 真机抓全栈确认，iOS 16 抖音）：
+//   按下：AWEIMOptimizeAudioInputTouchView -startRecord
+//        → AWEIMAudioRecordController -touchViewTouchDown
+//        → AWEIMAudioMessageRecorder -record（开始录音，写 mic 到 m4a）
+//   松手(区内)：AWEIMOptimizeAudioInputTouchView -stopRecordWithInTranslate:0
+//        → AWEIMAudioRecordController -audioInputTouchViewTouchUpInside:...
+//        → AWEIMAudioRecordController -audioInputTouchViewTouchUp:action: action=0
+//        → AWEIMAudioMessageRecorder -stopWithAction:1
+//        → AWEIMAudioRecordController -sendRecordMessageIfNeededWithFilePath:audioRecorder:  ★ 收 m4a 路径发消息
+// 与 QQ 不同：抖音 AWEIMAudioMessageRecorder 没有「喂数据」接口，startRecord 也无法在 tweak 里
+//   程序化触发（裸调死锁/挂起；长按手势 action p_handleGes: 需完整手势状态，模拟触摸不可行）。
+//   故抖音只能「半自动」：用户真实按住（真 startRecord）→ MyVoice 合成 TTS 编码 m4a →
+//   自动调 stopRecordWithInTranslate:0 替用户松手 → hook 发送方法把抖音录音文件换成 TTS m4a。
+
+static id  g_mvDouyinTouchView   = nil;   // 当前语音键视图（UIKit 持有，不 CFRetain）
+static BOOL g_mvDouyinActive     = NO;    // 本次录音走 TTS 替换
+static BOOL g_mvDouyinTTSReady   = NO;    // m4a 已就绪
+static NSString *g_mvDouyinTTSPath = nil; // 合成好的 TTS m4a 路径
+static NSTimeInterval g_mvDouyinPressStart = 0;
+static id  g_mvDouyinRecorder    = nil;
+
+static IMP g_mvOrigDYStart = NULL;
+static IMP g_mvOrigDYRecord = NULL;
+static IMP g_mvOrigDYSend   = NULL;
+static BOOL g_mvDYStartHookInstalled = NO;
+static BOOL g_mvDYRecHookInstalled   = NO;
+static BOOL g_mvDYSendHookInstalled  = NO;
+static BOOL g_mvDYRetryScheduled      = NO;
+
+static void MVDYStartHook(id self, SEL _cmd) {
+    // 仅当用户已在 MyVoice 面板准备了文本才走 TTS 替换，否则抖音正常录音
+    NSString *text = [[MyVoiceCloud shared] lastComposedText];
+    BOOL wants = (text.length > 0);
+    @synchronized([MyVoiceDirectSend class]) {
+        g_mvDouyinTouchView = self;
+        g_mvDouyinActive    = wants;
+        g_mvDouyinTTSReady  = NO;
+        g_mvDouyinTTSPath   = nil;
+        g_mvDouyinPressStart = [[NSDate date] timeIntervalSince1970];
+    }
+    if (g_mvOrigDYStart) ((void(*)(id,SEL))g_mvOrigDYStart)(self, _cmd);
+    if (wants) {
+        MVLog(@"[direct] 抖音：检测到按住（已备文本『%@』），启动 TTS 替换流程", text);
+        [MyVoiceDirectSend mvDouyinBeginTTS:text voice:[[MyVoiceCloud shared] lastComposedVoice]];
+    }
+}
+
+static void MVDYRecordHook(id self, SEL _cmd) {
+    @synchronized([MyVoiceDirectSend class]) { g_mvDouyinRecorder = self; }
+    if (g_mvOrigDYRecord) ((void(*)(id,SEL))g_mvOrigDYRecord)(self, _cmd);
+}
+
+// ★ 发送方法：把抖音写出的录音 m4a 替换成我们的 TTS m4a（路径直接收在参数里）
+static void MVDYSendHook(id self, SEL _cmd, id path, id recorder) {
+    @synchronized([MyVoiceDirectSend class]) {
+        if (g_mvDouyinActive && g_mvDouyinTTSPath) {
+            NSString *p = (NSString*)path;
+            if ([p isKindOfClass:[NSString class]] && p.length) {
+                @try {
+                    NSData *tts = [NSData dataWithContentsOfFile:g_mvDouyinTTSPath];
+                    if (tts.length) {
+                        [[NSFileManager defaultManager] removeItemAtPath:p error:nil];
+                        [tts writeToFile:p atomically:NO];
+                        MVLog(@"[direct] 抖音：已用 TTS m4a（%lu 字节）覆盖录音文件 %@",
+                              (unsigned long)tts.length, p);
+                    } else {
+                        MVLog(@"[direct] 抖音：TTS m4a 读取为空，放弃覆盖");
+                    }
+                } @catch (NSException *e) { MVLog(@"[direct] 抖音：覆盖文件异常 %@", e.reason); }
+            }
+            g_mvDouyinActive = NO;  // 消费本次替换
+        }
+    }
+    if (g_mvOrigDYSend) ((void(*)(id,SEL,id,id))g_mvOrigDYSend)(self, _cmd, path, recorder);
+}
+
+static void MVDYTryInstallHooks(void) {
+    @synchronized([MyVoiceDirectSend class]) {
+        Class tv = NSClassFromString(@"AWEIMOptimizeAudioInputTouchView");
+        if (tv && !g_mvDYStartHookInstalled) {
+            MSHookMessageEx(tv, @selector(startRecord), (IMP)MVDYStartHook, (IMP*)&g_mvOrigDYStart);
+            g_mvDYStartHookInstalled = YES;
+            MVLog(@"[direct] 抖音 AWEIMOptimizeAudioInputTouchView -startRecord 钩子已安装");
+        }
+        Class rec = NSClassFromString(@"AWEIMAudioMessageRecorder");
+        if (rec && !g_mvDYRecHookInstalled) {
+            MSHookMessageEx(rec, @selector(record), (IMP)MVDYRecordHook, (IMP*)&g_mvOrigDYRecord);
+            g_mvDYRecHookInstalled = YES;
+            MVLog(@"[direct] 抖音 AWEIMAudioMessageRecorder -record 钩子已安装");
+        }
+        Class ctrl = NSClassFromString(@"AWEIMAudioRecordController");
+        if (ctrl && !g_mvDYSendHookInstalled) {
+            MSHookMessageEx(ctrl, @selector(sendRecordMessageIfNeededWithFilePath:audioRecorder:),
+                            (IMP)MVDYSendHook, (IMP*)&g_mvOrigDYSend);
+            g_mvDYSendHookInstalled = YES;
+            MVLog(@"[direct] 抖音 AWEIMAudioRecordController -sendRecordMessageIfNeededWithFilePath: 钩子已安装");
+        }
+    }
+}
+
++ (BOOL)douyinAvailable {
+    NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
+    if ([bid rangeOfString:@"aweme" options:NSCaseInsensitiveSearch].location != NSNotFound &&
+        NSClassFromString(@"AWEIMOptimizeAudioInputTouchView") != nil) {
+        [self installDouyinHooksIfNeeded];
+        return YES;
+    }
+    return NO;
+}
+
++ (void)installDouyinHooksIfNeeded {
+    if (!mvDiagIsDouyin()) return;
+    MVDYTryInstallHooks();
+    if (g_mvDYStartHookInstalled && g_mvDYRecHookInstalled && g_mvDYSendHookInstalled) return;
+    if (g_mvDYRetryScheduled) return;
+    g_mvDYRetryScheduled = YES;
+    for (int i = 0; i < 24; i++) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((0.5 * (i + 1)) * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ MVDYTryInstallHooks(); });
+    }
+}
+
+// 合成 TTS → 编码 m4a → 准备就绪后自动松手
++ (void)mvDouyinBeginTTS:(NSString*)text voice:(NSString*)voice {
+    NSString *vid = voice.length ? voice : MVCurrentVoiceID();
+    [[MyVoiceCloud shared] synthesizeText:text voiceID:vid completion:^(NSData *pcm, NSError *e){
+        if (!pcm.length) {
+            MVLog(@"[direct] 抖音 TTS 合成失败：%@", e.localizedDescription ?: @"未知");
+            @synchronized([MyVoiceDirectSend class]) { g_mvDouyinActive = NO; }
+            return;
+        }
+        NSString *m4a = [self mvEncodePCMToM4A:pcm];
+        if (!m4a) { MVLog(@"[direct] 抖音 m4a 编码失败"); return; }
+        @synchronized([MyVoiceDirectSend class]) { g_mvDouyinTTSPath = m4a; g_mvDouyinTTSReady = YES; }
+        MVLog(@"[direct] 抖音 TTS 就绪 m4a=%@ (≈%.2fs)", m4a, pcm.length / 32000.0);
+        // 仿真实松手：确保最短按住 0.8s，避免「太短」被丢弃
+        NSTimeInterval el = [[NSDate date] timeIntervalSince1970] - g_mvDouyinPressStart;
+        double wait = MAX(0, 0.8 - el);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [self mvDouyinAutoRelease]; });
+    }];
+}
+
+// 自动松手（主线程调 stopRecordWithInTranslate:0 = 区内松手=发送）
++ (void)mvDouyinAutoRelease {
+    id view = nil; BOOL active = NO;
+    @synchronized([MyVoiceDirectSend class]) { view = g_mvDouyinTouchView; active = g_mvDouyinActive; }
+    if (!active) { MVLog(@"[direct] 抖音：本次未走 TTS（用户已手动处理），不自动松手"); return; }
+    if (!view) { MVLog(@"[direct] 抖音：无 TouchView，无法自动松手"); return; }
+    SEL sel = NSSelectorFromString(@"stopRecordWithInTranslate:");
+    if ([view respondsToSelector:sel]) {
+        @try {
+            ((void(*)(id, SEL, BOOL))objc_msgSend)(view, sel, NO);  // inTranslate=NO → 发送
+            MVLog(@"[direct] 抖音：已调 stopRecordWithInTranslate:0（模拟松手发送）");
+            [[MyVoiceManager shared] toast:@"✅ 抖音语音已发出（TTS）"];
+            AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
+        } @catch (NSException *e) { MVLog(@"[direct] 抖音 stopRecord 异常 %@", e.reason); }
+    } else {
+        MVLog(@"[direct] 抖音：TouchView 无 stopRecordWithInTranslate: 方法");
+    }
+}
+
+// 16k 单声道 S16 PCM → AAC m4a（抖音语音格式）。返回文件路径，失败返回 nil。
++ (NSString*)mvEncodePCMToM4A:(NSData*)pcm {
+    if (!pcm.length) return nil;
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:
+        [NSString stringWithFormat:@"myvoice_dy_%@.m4a", [NSUUID UUID].UUIDString]];
+    NSURL *outURL = [NSURL fileURLWithPath:path];
+    NSError *err = nil;
+    AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:outURL fileType:AVFileTypeAppleM4A error:&err];
+    if (!writer) { MVLog(@"[direct] 抖音 m4a writer 创建失败 %@", err); return nil; }
+    NSDictionary *settings = @{
+        AVFormatIDKey: @(kAudioFormatMPEG4AAC),
+        AVSampleRateKey: @16000,
+        AVNumberOfChannelsKey: @1,
+        AVEncoderBitRateKey: @(24000),
+        AVEncoderAudioQualityKey: @(AVAudioQualityMedium)
+    };
+    AVAssetWriterInput *input = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio
+                                                                   outputSettings:settings];
+    if (![writer canAddInput:input]) { MVLog(@"[direct] 抖音 m4a 不支持该音频设置"); return nil; }
+    [writer addInput:input];
+    [writer startWriting];
+    [writer startSessionAtSourceTime:kCMTimeZero];
+
+    AudioStreamBasicDescription asbd;
+    memset(&asbd, 0, sizeof(asbd));
+    asbd.mFormatID = kAudioFormatLinearPCM;
+    asbd.mSampleRate = 16000;
+    asbd.mChannelsPerFrame = 1;
+    asbd.mBitsPerChannel = 16;
+    asbd.mFramesPerPacket = 1;
+    asbd.mBytesPerFrame = 2;
+    asbd.mBytesPerPacket = 2;
+    asbd.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+
+    CMFormatDescriptionRef fmt = NULL;
+    OSStatus st = CMAudioFormatDescriptionCreate(kCFAllocatorDefault, &asbd, 0, NULL, 0, NULL, NULL, &fmt);
+    if (st != noErr) { MVLog(@"[direct] 抖音 m4a 格式描述失败 %d", (int)st); return nil; }
+
+    CMBlockBufferRef block = NULL;
+    st = CMBlockBufferCreateWithMemoryBlock(kCFAllocatorDefault, (void*)pcm.bytes, pcm.length,
+                                            kCFAllocatorNull, NULL, 0, pcm.length, 0, &block);
+    if (st != noErr) { CFRelease(fmt); MVLog(@"[direct] 抖音 m4a block 失败 %d", (int)st); return nil; }
+
+    size_t nFrames = (size_t)(pcm.length / 2);  // 16-bit 帧数
+    CMSampleTimingInfo timing = { CMTimeMake(1, 16000), kCMTimeZero, kCMTimeInvalid };
+    CMSampleBufferRef sample = NULL;
+    st = CMSampleBufferCreateReady(kCFAllocatorDefault, block, fmt, (CMItemCount)nFrames, 1, &timing, 1, &nFrames, &sample);
+    if (st != noErr) { CFRelease(block); CFRelease(fmt); MVLog(@"[direct] 抖音 m4a sample 失败 %d", (int)st); return nil; }
+
+    if ([input isReadyForMoreMediaData]) [input appendSampleBuffer:sample];
+    CFRelease(sample); CFRelease(block); CFRelease(fmt);
+    [input markAsFinished];
+
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    __block BOOL done = NO;
+    [writer finishWritingWithCompletionHandler:^{
+        done = (writer.status == AVAssetWriterStatusCompleted);
+        dispatch_semaphore_signal(sem);
+    }];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)));
+    if (!done || ![[NSFileManager defaultManager] fileExistsAtPath:path]) return nil;
+    return path;
 }
 
 + (BOOL)available {

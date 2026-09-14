@@ -4,6 +4,7 @@
 // 全部输出带 [mvdiag] 前缀，方便 idevicesyslog | grep mvdiag 抓取。
 
 BOOL mvDiagIsQQ(void);
+BOOL mvDiagIsDouyin(void);
 void mvDiagDumpClasses(void);
 void MVDebugDumpInputTree(UIView *root);
 NSString *mvDiagGRInfo(UIGestureRecognizer *gr);

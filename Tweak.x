@@ -100,6 +100,10 @@
             mvDiagDumpClasses();
             MVLog(@"[mvdiag] QQ 直发钩子已挂：点「合成语音」即自动开始并发送（需处于语音模式）");
         }
+        if (mvDiagIsDouyin()) {
+            [MyVoiceDirectSend installDouyinHooksIfNeeded];
+            MVLog(@"[mvdiag] 抖音半自动直发钩子已挂：按住语音键即合成 TTS 并替换录音文件发出");
+        }
     });
 
     // ③ AudioQueueNewInput 补丁：与宿主无关，随时可装；微信冷启动 CoreAudio 就绪有先后，故重试
