@@ -35,15 +35,15 @@ static NSError* MVBErr(NSString *msg) {
     if (![mp3 writeToFile:tmp atomically:YES]) { completion(nil, MVBErr(@"内置阳江话音频写出失败")); return; }
     [[MyVoiceCloud shared] cloneVoiceWithName:kMVYangjiangName
                           referenceAudioPath:tmp
-                                  completion:^(NSString *newVid, NSError *e){
+                                  completion:^(NSString *newVid, NSString *model, NSError *e){
         if (!newVid) { completion(nil, e ?: MVBErr(@"阳江话内置复刻失败")); return; }
         MVSetShared(kMVYangjiangPrefKey, newVid);
-        [self addYangjiangToVoices:newVid];
+        [self addYangjiangToVoices:newVid model:model];
         completion(newVid, nil);
     }];
 }
 
-+ (void)addYangjiangToVoices:(NSString*)vid {
++ (void)addYangjiangToVoices:(NSString*)vid model:(NSString*)model {
     if (!vid.length) return;
     NSMutableArray *vs = [NSMutableArray arrayWithArray:MVVoices()];
     for (NSDictionary *x in vs)
@@ -51,8 +51,9 @@ static NSError* MVBErr(NSString *msg) {
     NSMutableDictionary *entry = [NSMutableDictionary dictionary];
     entry[@"name"]    = kMVYangjiangName;
     entry[@"voiceID"] = vid;
-    entry[@"provider"] = @0;            // CosyVoice
-    entry[@"model"]   = MVCosyModel();  // 与复刻时一致
+    // ★ 2.8.30：model 用复刻实际成功的模型（cosyvoice 或回退的 qwen-audio），与复刻时一致。
+    entry[@"provider"] = @0;            // CosyVoice（默认；若回退到 qwen-audio，路由会按模型族改走千问路径）
+    entry[@"model"]   = model.length ? model : MVCosyModel();
     entry[@"builtin"] = @YES;
     [vs addObject:entry];
     MVSetSharedVoiceList(vs);           // 跨 App 共享，微信/QQ 都能用

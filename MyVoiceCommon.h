@@ -1159,6 +1159,14 @@ static inline NSString* MVCosyModel(void) {
 //   取不到就退回统一的复刻模型（MVCosyModel）。
 static inline NSString* MVModelForVoice(NSString *voiceID) {
     if (voiceID.length) {
+        // ★ 2.8.30：预置千问音色也在 MVQwenVoiceList 里，必须先查，
+        //   否则预置音色会漏到 cosyvoice 默认模型 → 千问预置声线错乱。
+        for (NSDictionary *d in MVQwenVoiceList()) {
+            if ([d[@"voiceID"] isEqualToString:voiceID]) {
+                NSString *m = d[@"model"];
+                if ([m isKindOfClass:[NSString class]] && m.length) return m;
+            }
+        }
         for (NSDictionary *d in MVVoices()) {
             if ([d[@"voiceID"] isEqualToString:voiceID]) {
                 NSString *m = d[@"model"];
@@ -1166,7 +1174,7 @@ static inline NSString* MVModelForVoice(NSString *voiceID) {
             }
         }
     }
-    return MVCosyModel();
+    return (MVTTSProvider()==1) ? MVQwenModel() : MVCosyModel();
 }
 
 // OSS（克隆音色时一次性托管参考音频，拿公网 URL 给 DashScope）
@@ -1307,6 +1315,14 @@ static inline BOOL MVGetBool2(id obj, NSString *sel, id a1, BOOL a2) {
 //   注意：必须放在 MVQwenVoiceList / MVVoices 声明之后（C 要求先声明后使用）。
 static inline NSInteger MVVoiceProvider(NSString *vid) {
     if (!vid.length) return MVTTSProvider();
+    // ★ 2.8.30：按音色【真实绑定的模型】路由，而不是 provider 字段。
+    //   旧版把千问克隆(myvoice-xxxx, 模型 qwen-audio-3.0-tts-plus)的 provider 写成 0(CosyVoice)，
+    //   合成却走了 CosyVoice 路径、喂了 qwen-audio 模型 → 音色不匹配 → 退回普通话。
+    //   现在：模型含 cosyvoice → CosyVoice 路径；含 qwen → 千问路径。彻底按"选哪个音色发哪个"。
+    NSString *m = MVModelForVoice(vid);
+    if ([m rangeOfString:@"cosyvoice" options:NSCaseInsensitiveSearch].location != NSNotFound) return 0;
+    if ([m rangeOfString:@"qwen"      options:NSCaseInsensitiveSearch].location != NSNotFound) return 1;
+    // 兜底：按 provider 字段 / 全局开关
     for (NSDictionary *d in MVQwenVoiceList())
         if ([d[@"voiceID"] isEqualToString:vid]) return 1;
     for (NSDictionary *d in MVVoices())

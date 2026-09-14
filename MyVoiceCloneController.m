@@ -381,9 +381,8 @@
     self.uploadBtn.enabled = NO;
     self.statusLabel.text = @"正在上传托管并复刻，约 10~30 秒…";
     __weak typeof(self) ws = self;
-    NSString *model = MVCosyModel();
     [[MyVoiceCloud shared] cloneVoiceWithName:name referenceAudioPath:self.uploadPath
-        completion:^(NSString *voiceID, NSError *err){
+        completion:^(NSString *voiceID, NSString *model, NSError *err){
             dispatch_async(dispatch_get_main_queue(), ^{
                 __strong typeof(ws) self = ws;
                 if (!self) return;
@@ -450,9 +449,8 @@
     if (!ok) { self.statusLabel.text = @"录音失败"; return; }
     self.statusLabel.text = @"录音完成，正在上传托管并复刻…";
     NSString *name = self.nameField.text.length ? self.nameField.text : @"我的声音";
-    NSString *model = MVCosyModel();
     [[MyVoiceCloud shared] cloneVoiceWithName:name referenceAudioPath:self.recPath
-        completion:^(NSString *voiceID, NSError *err){
+        completion:^(NSString *voiceID, NSString *model, NSError *err){
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (!voiceID) { self.statusLabel.text = [@"克隆失败：" stringByAppendingString:err.localizedDescription]; return; }
                 [self saveVoice:name voiceID:voiceID model:model];

@@ -246,7 +246,10 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
     if (!apiKey.length) { completion(nil, MVErr(@"未配置 DashScope API Key（设置→我的语音）")); return; }
     if (!text.length)   { completion(nil, MVErr(@"文字为空")); return; }
     NSString *voice = voiceID.length ? voiceID : MVQwenVoice();
-    NSString *model = MVQwenModel();
+    // ★ 2.8.30：模型必须由音色自身决定。千问克隆(myvoice-xxxx)绑定 qwen-audio-3.0-tts-plus，
+    //   写死 MVQwenModel()(qwen3-tts-flash) 会让克隆 id 被当预置音色 → 音色不匹配 → 普通话。
+    NSString *model = MVModelForVoice(voiceID);
+    if (!model.length) model = MVQwenModel();
     NSString *url = @"https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
     NSMutableDictionary *input = [NSMutableDictionary dictionaryWithDictionary:@{
         @"text": text,
@@ -646,6 +649,7 @@ static inline uint32_t MVrd32(const uint8_t *p) {
 
 // 复刻注册（create_voice）：音频地址可以是公网 http(s)（用户自有 OSS）或 oss://（临时托管）
 - (void)enrollCreateVoiceWithURL:(NSString*)audioURL
+                         model:(NSString*)enrollModel
                          resolve:(BOOL)resolve
                       completion:(void(^)(NSString *voiceID, NSError *err))completion {
     NSString *apiKey = MVAPIKey();
@@ -658,7 +662,7 @@ static inline uint32_t MVrd32(const uint8_t *p) {
     //   所以按模型判断后再带，避免给 cosyvoice-v3-plus / v2 传了直接 400。
     NSMutableDictionary *in = [NSMutableDictionary dictionary];
     in[@"action"]       = @"create_voice";
-    in[@"target_model"] = MVCosyModel();
+    in[@"target_model"] = enrollModel.length ? enrollModel : MVCosyModel();
     in[@"prefix"]       = @"myvoice";
     in[@"url"]          = audioURL;
     in[@"language_hints"] = @[@"zh"];
@@ -679,7 +683,7 @@ static inline uint32_t MVrd32(const uint8_t *p) {
     req.HTTPBody = json;
     req.timeoutInterval = 60;
     MVLog(@"[cloud] 复刻请求 url=%@ resolve=%d target_model=%@ maxLen=%.0fs preprocess=%d",
-          audioURL, resolve, MVCosyModel(), MVCloneMaxLen(), (int)MVClonePreprocess());
+          audioURL, resolve, enrollModel, MVCloneMaxLen(), (int)MVClonePreprocess());
     [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *err){
         if (err) { completion(nil, err); return; }
         NSInteger code = [(NSHTTPURLResponse*)r statusCode];
@@ -747,13 +751,30 @@ static inline uint32_t MVrd32(const uint8_t *p) {
     return [[NSData dataWithBytes:out length:CC_SHA1_DIGEST_LENGTH] base64EncodedStringWithOptions:0];
 }
 
+
+#pragma mark - 复刻回退（cosyvoice 不开通时试 qwen-audio）
+
+- (void)mvEnrollWithFallback:(NSString*)audioURL model:(NSString*)firstModel resolve:(BOOL)resolve completion:(void(^)(NSString *voiceID, NSString *model, NSError *err))completion {
+    [self enrollCreateVoiceWithURL:audioURL model:firstModel resolve:resolve completion:^(NSString *vid, NSError *e){
+        if (vid.length) { completion(vid, firstModel, nil); return; }
+        // ★ 2.8.30：首模型(cosyvoice-v3.5-plus)失败 → 回退 qwen-audio-3.0-tts-plus。
+        //   很多 DashScope 账号只开了千问 TTS、没开 CosyVoice 权限，克隆会直接报错"无法克隆"。
+        NSString *fb = @"qwen-audio-3.0-tts-plus";
+        if ([firstModel isEqualToString:fb]) { completion(nil, nil, e); return; }
+        MVLog(@"[cloud] 复刻首模型 %@ 失败，回退 %@", firstModel, fb);
+        [self enrollCreateVoiceWithURL:audioURL model:fb resolve:resolve completion:^(NSString *vid2, NSError *e2){
+            if (vid2.length) completion(vid2, fb, nil); else completion(nil, nil, e2 ?: e);
+        }];
+    }];
+}
+
 #pragma mark - 声音复刻（克隆）
 
-- (void)cloneVoiceWithName:(NSString*)name referenceAudioPath:(NSString*)path completion:(void(^)(NSString*,NSError*))completion {
+- (void)cloneVoiceWithName:(NSString*)name referenceAudioPath:(NSString*)path completion:(void(^)(NSString *voiceID, NSString *model, NSError *err))completion {
     NSString *apiKey = MVAPIKey();
-    if (!apiKey.length) { completion(nil, MVErr(@"未配置 DashScope API Key")); return; }
+    if (!apiKey.length) { completion(nil, nil, MVErr(@"未配置 DashScope API Key")); return; }
     NSData *audio = [NSData dataWithContentsOfFile:path];
-    if (audio.length == 0) { completion(nil, MVErr(@"参考音频读取失败")); return; }
+    if (audio.length == 0) { completion(nil, nil, MVErr(@"参考音频读取失败")); return; }
 
     // ★ 2.4.0 三态：配了自有 OSS → 老路径（公网 URL）；没配 → DashScope 临时托管（免 OSS）
     BOOL hasOSS = (MVOSSBucket().length && MVOSSHost().length && MVOSSAk().length && MVOSSSk().length);
@@ -764,8 +785,8 @@ static inline uint32_t MVrd32(const uint8_t *p) {
         NSDictionary *ctMap2 = @{@"wav": @"audio/wav", @"mp3": @"audio/mpeg", @"m4a": @"audio/mp4",
                                  @"aac": @"audio/aac", @"flac": @"audio/flac", @"amr": @"audio/amr"};
         [self uploadToOSS:audio objectKey:key contentType:(ctMap2[ext2] ?: @"audio/wav") completion:^(NSString *url, NSError *e){
-            if (!url) { completion(nil, e ?: MVErr(@"OSS 上传失败")); return; }
-            [self enrollCreateVoiceWithURL:url resolve:NO completion:completion];
+            if (!url) { completion(nil, nil, e ?: MVErr(@"OSS 上传失败")); return; }
+            [self mvEnrollWithFallback:url model:MVCosyModel() resolve:NO completion:completion];
         }];
         return;
     }
@@ -778,8 +799,8 @@ static inline uint32_t MVrd32(const uint8_t *p) {
     NSString *ct = ctMap[ext] ?: @"audio/wav";
     NSString *fname = [NSString stringWithFormat:@"mv_%@.%@", [[NSUUID UUID] UUIDString], ext];
     [self uploadToDashScopeInstant:audio fileName:fname contentType:ct completion:^(NSString *ossURL, NSError *e){
-        if (!ossURL) { completion(nil, e ?: MVErr(@"音频托管失败")); return; }
-        [self enrollCreateVoiceWithURL:ossURL resolve:YES completion:completion];
+        if (!ossURL) { completion(nil, nil, e ?: MVErr(@"音频托管失败")); return; }
+        [self mvEnrollWithFallback:ossURL model:MVCosyModel() resolve:YES completion:completion];
     }];
 }
 
