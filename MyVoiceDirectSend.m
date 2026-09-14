@@ -21,6 +21,7 @@ extern void MSHookMessageEx(Class _class, SEL message, IMP hook, IMP *old);
 + (NSString*)stopWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc qqMode:(BOOL)qqMode;
 + (id)stashedQQOperator;
 + (id)stashedQQRecorder;
++ (id)qqAutoOperator;
 + (BOOL)qqAvailable;
 + (void)cancelWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc;
 @end
@@ -91,6 +92,48 @@ static id MVInvoke(id obj, NSString *selName, NSArray *args) {
 // 太长会白录一段静音、拖长发送时间。参考实现 v23 从 1.2s 收到 0.3s；
 // 实测最后一块在 100ms 内必落地，这里取 0.25s。
 static const double kMVPostFeedWait = 0.25;
+
+// ★ 2.8.15：在对象图里深搜某个类的实例（用于 QQ 主动找 PttRecordOperator）。
+//   仅下钻时拦截 Foundation/UIKit/CoreFoundation 等巨型系统图，避免爆栈/卡死；
+//   根对象（如聊天 VC）允许继续下钻，命中目标类即返回（UI/系统类也不漏）。
+static BOOL MVClassMatches(Class c, NSArray *names);
+static id MVFindQQInstanceOfClasses(id obj, NSArray<NSString*>*clsNames, int depth, int *guard) {
+    if (!obj || !clsNames.count) return nil;
+    if ((*guard)++ > 12000) return nil;
+    if (depth > 6) return nil;
+    Class root = object_getClass(obj);
+    if (MVClassMatches(root, clsNames)) return obj;
+    if (depth > 0) {
+        NSString *cn = NSStringFromClass(root) ?: @"";
+        if ([cn hasPrefix:@"NS"] || [cn hasPrefix:@"UI"] || [cn hasPrefix:@"CA"] ||
+            [cn hasPrefix:@"_"] || [cn hasPrefix:@"CF"] || [cn hasPrefix:@"Swift"] ||
+            [cn hasPrefix:@"WK"] || [cn hasPrefix:@"__"]) return nil;
+    }
+    @try {
+        Class c = root; int lvl = 0;
+        while (c && lvl < 6) {
+            unsigned int cnt = 0;
+            Ivar *ivs = class_copyIvarList(c, &cnt);
+            if (ivs) {
+                for (unsigned int i = 0; i < cnt; i++) {
+                    const char *te = ivar_getTypeEncoding(ivs[i]);
+                    if (!te || te[0] != '@') continue;
+                    id v = nil;
+                    @try { v = object_getIvar(obj, ivs[i]); } @catch (NSException *e) { v = nil; }
+                    if (!v) continue;
+                    NSString *vn = NSStringFromClass(object_getClass(v)) ?: @"";
+                    if ([vn hasPrefix:@"NS"] || [vn hasPrefix:@"UI"] || [vn hasPrefix:@"CA"] ||
+                        [vn hasPrefix:@"_"] || [vn hasPrefix:@"CF"] || [vn hasPrefix:@"Swift"]) continue;
+                    id r = MVFindQQInstanceOfClasses(v, clsNames, depth + 1, guard);
+                    if (r) { free(ivs); return r; }
+                }
+                free(ivs);
+            }
+            c = class_getSuperclass(c); lvl++;
+        }
+    } @catch (NSException *e) { }
+    return nil;
+}
 
 @implementation MyVoiceDirectSend
 
@@ -342,6 +385,52 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
 }
 + (id)stashedQQRecorder { @synchronized([MyVoiceDirectSend class]) { return g_mvQQRecorder; } }
 
+// ---- ★ 2.8.15：QQ 全自动直发（点「合成语音」无需先手动按住）----
+//   旧逻辑依赖「用户手动按住说话」时 didTriggeredRecord 钩子扣留的 Operator；
+//   没按住过时 stashedQQOperator 为空 → 只能退回手动。这里主动从当前聊天页对象图
+//   里把 PttRecordOperator 找出来，直接调 didTriggeredRecord 开始录音（与手动按住
+//   完全同链路：createRecorder 钩子照样扣留新 QQPttRecorder，TTS 照常喂入）。找不到则退回手动。
++ (id)qqAutoOperator {
+    @synchronized([MyVoiceDirectSend class]) {
+        if (g_mvQQOperator) { MVLog(@"[direct] QQ 自动：复用已扣留 Operator"); return g_mvQQOperator; }
+    }
+    Class opCls = NSClassFromString(@"NTAIOChat.NTAIOPttRecordOperator");
+    Class btnCls = NSClassFromString(@"QQPttRecordBtn");
+    NSArray *opNames = opCls ? @[NSStringFromClass(opCls)] : @[];
+    NSArray *btnNames = btnCls ? @[NSStringFromClass(btnCls)] : @[];
+    UIViewController *vc = nil;
+    @try { vc = [MyVoiceResolver currentChatVC]; } @catch (NSException *e) { vc = nil; }
+    if (!vc) { MVLog(@"[direct] QQ 自动：未找到当前聊天页 VC"); return nil; }
+    int g = 0;
+    // ① 直接在聊天页对象图里找 operator（不依赖按钮属性名，最稳）
+    if (opCls) {
+        id op = MVFindQQInstanceOfClasses(vc, opNames, 0, &g);
+        if (op) { MVLog(@"[direct] QQ 自动：VC 图内找到 Operator %@", NSStringFromClass(object_getClass(op))); return op; }
+    }
+    // ② 找录音按钮，再读其 operator 属性
+    NSArray *btnProps = @[@"m_operator", @"operator", @"recordOperator",
+                           @"pptRecordOperator", @"_operator", @"m_recordOperator", @"delegate"];
+    id btn = btnCls ? MVFindQQInstanceOfClasses(vc, btnNames, 0, &g) : nil;
+    if (!btn && vc.view) btn = MVFindQQInstanceOfClasses(vc.view, btnNames, 0, &g);
+    if (btn) {
+        MVLog(@"[direct] QQ 自动：找到录音按钮 %@", NSStringFromClass(object_getClass(btn)));
+        for (NSString *k in btnProps) {
+            id op = [MyVoiceResolver valueForIvars:btn names:@[k]];
+            if (op && (!opCls || MVClassMatches(object_getClass(op), opNames))) {
+                MVLog(@"[direct] QQ 自动：按钮属性 %@ → Operator", k);
+                return op;
+            }
+        }
+        if (opCls) {
+            int g2 = 0;
+            id op = MVFindQQInstanceOfClasses(btn, opNames, 0, &g2);
+            if (op) { MVLog(@"[direct] QQ 自动：按钮子图找到 Operator"); return op; }
+        }
+    }
+    MVLog(@"[direct] QQ 自动：未能定位 Operator（将退回手动按住）");
+    return nil;
+}
+
 + (BOOL)available {
     if ([self qqAvailable]) return YES;
     if ([NSThread isMainThread]) return ([self recordController] != nil || [self audioSender] != nil);
@@ -413,6 +502,10 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
         //   自己 alloc 的裸实例录音正常但 QQ 不发（真机实测）。
         // ★ 2.6.0：操作器由用户在该聊天按住说话键时扣留（didTriggeredRecord 钩子）。
         target = [MyVoiceDirectSend stashedQQOperator];
+        if (!target) {
+            // ★ 2.8.15：点合成语音时若尚未手动按住，主动定位当前聊天的 PttRecordOperator 并触发录音
+            target = [MyVoiceDirectSend qqAutoOperator];
+        }
         if (!target) {
             // ★ 2.6.2：TTS 装填保持有效 —— 用户随后手动按住说话，队列照样被喂 TTS
             MVLog(@"[direct] QQ：尚无激活的 Operator —— 保持装填，等待手动按住");

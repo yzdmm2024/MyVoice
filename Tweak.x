@@ -70,7 +70,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.8.14（阳江话→广东话、皖北话→河南话，方言指令真正生效）");
+        MVLog(@"载入 我的语音 v2.8.15（QQ 全自动发送：点合成语音无需先手动按住说话）");
         MVLog(@"宿主 App：%@（版本 %@）",
               [NSBundle mainBundle].bundleIdentifier ?: @"?",
               [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");
