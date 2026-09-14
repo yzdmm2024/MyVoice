@@ -317,8 +317,10 @@ static id  g_mvQQOperator = nil;   // 最近一次按住的聊天操作器（强
 static id  g_mvQQRecorder = nil;   // 最近一次录音的 QQPttRecorder（每次录音新建）
 static IMP g_mvOrigQQDidTrig = NULL;
 static IMP g_mvOrigQQCreateRec = NULL;
+static IMP g_mvOrigQQRecStart = NULL;   // ★ 2.8.22：recorder -startRecordAsync:completion: 原始实现
 static BOOL g_mvQQOpHookInstalled  = NO;   // ★ 2.8.20：operator 钩独立标志（类可能晚加载）
-static BOOL g_mvQQRecHookInstalled = NO;   // ★ 2.8.20：recorder 钩独立标志
+static BOOL g_mvQQRecHookInstalled = NO;   // ★ 2.8.20：recorder createRecorder 钩独立标志
+static BOOL g_mvQQRecStartHookInstalled = NO;   // ★ 2.8.22：recorder startRecordAsync:completion: 钩独立标志
 
 // ★ 2.8.19：直接捕获 QQPushToTalkView 实例（不再递归遍历 vc.view.subviews —— 该遍历会在
 //   QQ 切换语音模式时碰到正在释放的视图，for...in 拿到悬空数组 → EXC_BAD_ACCESS 闪退）。
@@ -380,6 +382,22 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
     return rec;
 }
 
+// ★ 2.8.22：录音真正开始时（不论走 +createRecorder 还是 alloc/init 路径），recorder 必然调用
+//   -startRecordAsync:completion:。在此扣留 self，确保「停止」阶段 100% 拿得到当前 recorder 实例
+//   —— 2.8.15~2.8.21 全自动模式「一直录、停不下来」的根因正是：自动走 startRecordAsync 入口，
+//   recorder 创建路径没命中 createRecorder 钩 → g_mvQQRecorder 为 nil → 停止时直接 return、啥也没调。
+static void MVQQRecorderStartHook(id self, SEL _cmd, id arg1, id arg2) {
+    @synchronized([MyVoiceDirectSend class]) {
+        if (g_mvQQRecorder != self) {
+            if (g_mvQQRecorder) CFRelease((__bridge CFTypeRef)g_mvQQRecorder);
+            g_mvQQRecorder = self;
+            CFRetain((__bridge CFTypeRef)self);
+            MVLog(@"[direct] 已扣留 QQPttRecorder %p（startRecordAsync:completion:）", self);
+        }
+    }
+    ((void(*)(id, SEL, id, id))g_mvOrigQQRecStart)(self, _cmd, arg1, arg2);
+}
+
 + (void)installQQHooks {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -413,6 +431,12 @@ static void MVQQTryInstallHooks(void) {
             MSHookMessageEx(rec, @selector(createRecorder), (IMP)MVQQCreateRecorderHook, (IMP *)&g_mvOrigQQCreateRec);
             g_mvQQRecHookInstalled = YES;
             MVLog(@"[direct] QQ QQPttRecorder createRecorder 钩子已安装");
+        }
+        // ★ 2.8.22：补 startRecordAsync:completion: 钩，覆盖所有 recorder 创建路径
+        if (rec && !g_mvQQRecStartHookInstalled) {
+            MSHookMessageEx(rec, @selector(startRecordAsync:completion:), (IMP)MVQQRecorderStartHook, (IMP *)&g_mvOrigQQRecStart);
+            g_mvQQRecStartHookInstalled = YES;
+            MVLog(@"[direct] QQ QQPttRecorder startRecordAsync:completion: 钩子已安装");
         }
         Class vcls = NSClassFromString(@"QQPushToTalkView");
         if (vcls && !g_mvQQPTVHookInstalled) {
@@ -454,8 +478,10 @@ static void MVQQTryInstallHooks(void) {
                 if ([MyVoiceRecorder fedDone] && el >= 1.3) {
                     dispatch_async(dispatch_get_main_queue(), ^{
                         id rec = [MyVoiceDirectSend stashedQQRecorder];
-                        if (rec) {
-                            [MyVoiceDirectSend mvQQSendRecorder:rec];
+                        id op  = [MyVoiceDirectSend stashedQQOperator];
+                        if (rec) [MyVoiceDirectSend mvQQSendRecorder:rec];
+                        if (op)  MVInvoke(op, @"onRecordEnd:send:", @[[NSNull null], @YES]);
+                        if (rec || op) {
                             [[MyVoiceManager shared] toast:@"✅ 语音已发出，可以松手了"];
                             AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
                             if (@available(iOS 10.0, *)) {
@@ -463,7 +489,7 @@ static void MVQQTryInstallHooks(void) {
                                 [hg prepare];
                                 [hg notificationOccurred:UINotificationFeedbackTypeSuccess];
                             }
-                            MVLog(@"[autoStop] ✅ TTS 已喂完，自动 stopRecord + 震动（已发出可松手）");
+                            MVLog(@"[autoStop] ✅ TTS 已喂完，自动停止并发送 + 震动（已发出可松手）");
                             [MyVoiceRecorder resetAfterSend:2.0];
                         }
                     });
@@ -811,14 +837,24 @@ static void MVQQTryInstallHooks(void) {
 // 停止并发送：优先无参 StopRecord（AudioSender）；退化到 RecordController 的停止方法
 + (NSString*)stopWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc qqMode:(BOOL)qqMode {
     if (qqMode) {
-        // ★ 2.8.18：真链发送方法是 sendRecordData（无参）；退化 stopRecord。
+        // ★ 2.8.22：双保险结束并发送。优先 recorder -sendRecordData（真链），
+        //   若未扣留到 recorder，则用始终可靠的 operator -onRecordEnd:send:(YES) 兜底，
+        //   彻底解决「一直录、停不下来、无法取消」。两者都试，已结束的 recorder 二次调用为 no-op。
         id rec = [MyVoiceDirectSend stashedQQRecorder];
+        id op  = [MyVoiceDirectSend stashedQQOperator];
+        BOOL did = NO;
         if (rec) {
             [MyVoiceDirectSend mvQQSendRecorder:rec];
-            return @"QQ QQPttRecorder -sendRecordData";
+            did = YES;
+            MVLog(@"[direct] QQ 停止：已调 recorder sendRecordData");
         }
-        MVLog(@"[direct] ⚠️ QQ 停止时找不到 QQPttRecorder 实例");
-        return @"(无)";
+        if (op) {
+            MVInvoke(op, @"onRecordEnd:send:", @[[NSNull null], @YES]);
+            did = YES;
+            MVLog(@"[direct] QQ 停止：已调 operator onRecordEnd:send:(YES) —— 录音结束并发送");
+        }
+        if (!did) MVLog(@"[direct] ⚠️ QQ 停止时 recorder 与 operator 均为 nil（无法结束）");
+        return did ? @"QQ 结束并发送" : @"(无)";
     }
     if (stopTarget) {
         if (isSender) {
@@ -844,10 +880,14 @@ static void MVQQTryInstallHooks(void) {
 + (void)cancelWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc {
     id t = stopTarget ?: rc;
     if (!t) return;
-    // ★ QQ：stopRecord:NO = 结束但不发送
+    // ★ 2.8.22：QQ 取消 = 结束但不发送。优先 recorder -stopRecord，再用 operator
+    //   -onRecordEnd:send:(NO) 兜底（任一能停即可，避免麦克风常开 / 残留录音会话）。
     if ([MyVoiceDirectSend qqAvailable]) {
-        MVInvoke(t, @"stopRecord:", @[@NO]);
-        MVLog(@"[direct] 已调用 QQ stopRecord:NO（取消）");
+        id rec = [MyVoiceDirectSend stashedQQRecorder];
+        id op  = [MyVoiceDirectSend stashedQQOperator];
+        if (rec) { MVInvoke(rec, @"stopRecord", nil); MVLog(@"[direct] QQ 取消：recorder -stopRecord"); }
+        if (op)  { MVInvoke(op, @"onRecordEnd:send:", @[[NSNull null], @NO]); MVLog(@"[direct] QQ 取消：operator -onRecordEnd:send:(NO)"); }
+        if (!rec && !op) MVLog(@"[direct] QQ 取消：无 recorder/operator 可调用");
         return;
     }
     for (NSString *sel in @[@"CancelRecording", @"CancelRecord", @"StopRecording", @"StopRecord"]) {
