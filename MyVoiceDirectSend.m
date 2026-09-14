@@ -371,8 +371,9 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
     id rec = ((id(*)(id, SEL))g_mvOrigQQCreateRec)(self, _cmd);
     if (rec) {
         @synchronized([MyVoiceDirectSend class]) {
-            if (g_mvQQRecorder != rec) {
-                if (g_mvQQRecorder) CFRelease((__bridge CFTypeRef)g_mvQQRecorder);
+            // ★ 2.8.23：startRecordAsync:completion: 先扣的是真正在录音的 recorder；
+            //   createRecorder 可能返回内部新建对象，仅在尚未扣留时才设，避免覆盖成错误实例。
+            if (g_mvQQRecorder == nil) {
                 g_mvQQRecorder = rec;
                 CFRetain((__bridge CFTypeRef)rec);
                 MVLog(@"[direct] 已扣留新 QQPttRecorder %p", rec);
@@ -837,24 +838,41 @@ static void MVQQTryInstallHooks(void) {
 // 停止并发送：优先无参 StopRecord（AudioSender）；退化到 RecordController 的停止方法
 + (NSString*)stopWith:(id)stopTarget sender:(BOOL)isSender fallbackRC:(id)rc qqMode:(BOOL)qqMode {
     if (qqMode) {
-        // ★ 2.8.22：双保险结束并发送。优先 recorder -sendRecordData（真链），
-        //   若未扣留到 recorder，则用始终可靠的 operator -onRecordEnd:send:(YES) 兜底，
-        //   彻底解决「一直录、停不下来、无法取消」。两者都试，已结束的 recorder 二次调用为 no-op。
+        // ★ 2.8.23：模拟用户松手 —— 调 QQPushToTalkView -touchEnd:(UITouch*)
+        //   真机 frida 侦察确认（手动松手全栈）：QQPttRecordBtn.touchesEnded:withEvent:
+        //   内部把单个 UITouch 交给 QQPushToTalkView.touchEnd:，这是「停止录音 + 发送」的
+        //   【唯一真实入口】。之前调 sendRecordData / onRecordEnd:send: 是更底层的「发包」方法，
+        //   它们要求 touchEnd: 先设好「已松手/录音结束」状态才能真正停 AudioQueue ——
+        //   直接调它们等于绕过状态机，导致录音一直不停止、无法发送（2.8.20~2.8.22 翻车根因）。
+        //   故自动发送 = 停止阶段也走和手动完全一致的 touchEnd:，QQ 内部正确停止并发送。
+        @synchronized([MyVoiceDirectSend class]) {
+            id view = g_mvQQPushToTalkView;
+            if (view && [view window] != nil &&
+                [view respondsToSelector:NSSelectorFromString(@"touchEnd:")]) {
+                UITouch *t = [MyVoiceDirectSend mvSyntheticTouchOnView:view phase:UITouchPhaseEnded];
+                @try {
+                    #pragma clang diagnostic push
+                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                    [view performSelector:NSSelectorFromString(@"touchEnd:") withObject:t];
+                    #pragma clang diagnostic pop
+                    MVLog(@"[direct] QQ 停止：已模拟松手 touchEnd:（停止并发送）");
+                    return @"QQ 模拟松手停止并发送";
+                } @catch (NSException *e) {
+                    MVLog(@"[direct] QQ touchEnd: 异常 %@，退化底层兜底", e.reason);
+                }
+            } else {
+                MVLog(@"[direct] QQ 停止：无可用 PushToTalkView（window=%@）",
+                      view ? ([view window] ? @"有" : @"无") : @"nil");
+            }
+        }
+        // 兜底丝（已知 sendRecordData/onRecordEnd 不直接停录音，仅保险，正常情况下不走）
         id rec = [MyVoiceDirectSend stashedQQRecorder];
         id op  = [MyVoiceDirectSend stashedQQOperator];
         BOOL did = NO;
-        if (rec) {
-            [MyVoiceDirectSend mvQQSendRecorder:rec];
-            did = YES;
-            MVLog(@"[direct] QQ 停止：已调 recorder sendRecordData");
-        }
-        if (op) {
-            MVInvoke(op, @"onRecordEnd:send:", @[[NSNull null], @YES]);
-            did = YES;
-            MVLog(@"[direct] QQ 停止：已调 operator onRecordEnd:send:(YES) —— 录音结束并发送");
-        }
-        if (!did) MVLog(@"[direct] ⚠️ QQ 停止时 recorder 与 operator 均为 nil（无法结束）");
-        return did ? @"QQ 结束并发送" : @"(无)";
+        if (rec) { [MyVoiceDirectSend mvQQSendRecorder:rec]; did = YES; }
+        if (op)  { MVInvoke(op, @"onRecordEnd:send:", @[[NSNull null], @YES]); did = YES; }
+        if (!did) MVLog(@"[direct] ⚠️ QQ 停止时 recorder/operator/PushToTalkView 均不可用（无法结束）");
+        return did ? @"QQ 兜底结束" : @"(无)";
     }
     if (stopTarget) {
         if (isSender) {
@@ -883,11 +901,30 @@ static void MVQQTryInstallHooks(void) {
     // ★ 2.8.22：QQ 取消 = 结束但不发送。优先 recorder -stopRecord，再用 operator
     //   -onRecordEnd:send:(NO) 兜底（任一能停即可，避免麦克风常开 / 残留录音会话）。
     if ([MyVoiceDirectSend qqAvailable]) {
+        // ★ 2.8.23：取消也走 touchEnd:（停止优先，与发送同一真实入口）。
+        //   QQ 松手即发送、上滑才取消；自动模式下「停止」是首要诉求，故取消 = 模拟松手停止。
+        @synchronized([MyVoiceDirectSend class]) {
+            id view = g_mvQQPushToTalkView;
+            if (view && [view window] != nil &&
+                [view respondsToSelector:NSSelectorFromString(@"touchEnd:")]) {
+                UITouch *to = [MyVoiceDirectSend mvSyntheticTouchOnView:view phase:UITouchPhaseEnded];
+                @try {
+                    #pragma clang diagnostic push
+                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                    [view performSelector:NSSelectorFromString(@"touchEnd:") withObject:to];
+                    #pragma clang diagnostic pop
+                    MVLog(@"[direct] QQ 取消：已模拟松手 touchEnd:（停止）");
+                    return;
+                } @catch (NSException *e) {
+                    MVLog(@"[direct] QQ 取消 touchEnd: 异常 %@", e.reason);
+                }
+            }
+        }
         id rec = [MyVoiceDirectSend stashedQQRecorder];
         id op  = [MyVoiceDirectSend stashedQQOperator];
-        if (rec) { MVInvoke(rec, @"stopRecord", nil); MVLog(@"[direct] QQ 取消：recorder -stopRecord"); }
-        if (op)  { MVInvoke(op, @"onRecordEnd:send:", @[[NSNull null], @NO]); MVLog(@"[direct] QQ 取消：operator -onRecordEnd:send:(NO)"); }
-        if (!rec && !op) MVLog(@"[direct] QQ 取消：无 recorder/operator 可调用");
+        if (rec) { MVInvoke(rec, @"stopRecord", nil); MVLog(@"[direct] QQ 取消：recorder -stopRecord（兜底）"); }
+        if (op)  { MVInvoke(op, @"onRecordEnd:send:", @[[NSNull null], @NO]); MVLog(@"[direct] QQ 取消：operator -onRecordEnd:send:(NO)（兜底）"); }
+        if (!rec && !op) MVLog(@"[direct] QQ 取消：无 recorder/operator/PushToTalkView 可调用");
         return;
     }
     for (NSString *sel in @[@"CancelRecording", @"CancelRecord", @"StopRecording", @"StopRecord"]) {
