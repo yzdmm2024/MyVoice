@@ -229,6 +229,20 @@ static inline void MVSetShared(NSString *key, id value) {
     [d writeToFile:p atomically:YES];   // 沙箱可能拒绝写 jbroot，失败无所谓（上面已写容器）
 }
 
+// ★ 2.8.13：克隆音色列表专用写入 —— 在 MVSetShared（容器 + jbroot）基础上，
+//   额外写一份到 CFPreferences 全局域（kCFPreferencesAnyUser），保证微信/QQ 互通。
+//   读端见 MVVoices()：全局域优先，退化到 jbroot / 容器都不影响。
+static inline void MVSetSharedVoiceList(NSArray *vs) {
+    if (!vs) vs = @[];
+    MVSetShared(@"voices", vs);
+    CFPreferencesSetValue((__bridge CFStringRef)@"voices",
+                          (__bridge CFPropertyListRef)vs,
+                          (__bridge CFStringRef)MV_PREFS_ID,
+                          kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
+    CFPreferencesSynchronize((__bridge CFStringRef)MV_PREFS_ID,
+                             kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
+}
+
 // 上次捕获到的会话（微信 8.0.75 上 VC 里没有 talker 字段，只能靠 hook 抓 + 记住）
 // 存「值 + 时间戳」，超过 30 分钟视为过期，避免把消息发给很久以前打开过的会话。
 static inline void MVSetLastTalker(NSString *talker) {
@@ -512,7 +526,7 @@ static inline NSArray* MVDialectListForModel(NSString *m) {
     if (!qwen) qwen = @[@"普通话", @"广东话", @"重庆话", @"东北话", @"甘肃话", @"贵州话",
                         @"浙江话", @"河北话", @"河南话", @"湖北话", @"湖南话", @"江西话",
                         @"宁波话", @"宁夏话", @"青岛话", @"陕西话", @"山西话", @"山东话",
-                        @"上海话", @"四川话", @"云南话"];
+                        @"上海话", @"四川话", @"云南话", @"阳江话", @"皖北话"];
     if ([m hasPrefix:@"qwen-audio-3.0-tts"]) return qwen;
     if (MVCosyModelSupportsDialect(m)) return cosy;
     return @[];
@@ -1078,9 +1092,39 @@ static inline NSString* MVAPIKey(void)     { return MVGetStr(@"apiKey"); }
 static inline NSString* MVWorkspace(void)  { return MVGetStr(@"workspace"); }
 
 // 多音色列表：@[@{name, voiceID, model}]
+// ★ 2.8.13：克隆音色必须跨 App 共享（微信克隆 → QQ 也显示）。
+//   旧实现 MVGet 容器优先：微信把克隆写进自己沙盒容器，QQ 读自己空容器就返回空，
+//   于是「微信克隆、QQ 看不到」。改为优先读全局共享域（CFPreferences 全局域 +
+//   jbroot 共享 plist），再并入本 App 容器的值（按 voiceID 去重）。
 static inline NSArray* MVVoices(void) {
-    id v = MVGet(@"voices");
-    return [v isKindOfClass:[NSArray class]] ? v : @[];
+    NSMutableArray *out = [NSMutableArray array];
+    // ① 全局域（kCFPreferencesAnyUser）—— 各 App 都能读到，最稳的跨 App 通道
+    CFPropertyListRef gv = CFPreferencesCopyValue((__bridge CFStringRef)@"voices",
+        (__bridge CFStringRef)MV_PREFS_ID, kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
+    if (gv) {
+        NSArray *a = CFBridgingRelease(gv);
+        if ([a isKindOfClass:[NSArray class]]) [out addObjectsFromArray:a];
+    }
+    // ② jbroot 共享 plist
+    NSDictionary *shared = MVSharedPrefs();
+    NSArray *sv = shared[@"voices"];
+    if ([sv isKindOfClass:[NSArray class]]) {
+        for (NSDictionary *d in sv) {
+            BOOL dup = NO;
+            for (NSDictionary *e in out) if ([e[@"voiceID"] isEqualToString:d[@"voiceID"]]) { dup = YES; break; }
+            if (!dup) [out addObject:d];
+        }
+    }
+    // ③ 本 App 容器（刚保存的本地副本），并入去重
+    id cv = [MVPrefs() objectForKey:@"voices"];
+    if ([cv isKindOfClass:[NSArray class]]) {
+        for (NSDictionary *d in (NSArray*)cv) {
+            BOOL dup = NO;
+            for (NSDictionary *e in out) if ([e[@"voiceID"] isEqualToString:d[@"voiceID"]]) { dup = YES; break; }
+            if (!dup) [out addObject:d];
+        }
+    }
+    return out.count ? out : @[];
 }
 static inline NSDictionary* MVCurrentVoice(void) {
     NSString *cur = MVGetStr(@"currentVoiceID");

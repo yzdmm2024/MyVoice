@@ -553,7 +553,7 @@
     }
     if (same >= 0) vs[(NSUInteger)same] = entry; else [vs addObject:entry];
 
-    MVSetShared(@"voices", vs);
+    MVSetSharedVoiceList(vs);   // ★ 2.8.13 跨 App 共享（微信/QQ 互通）
     MVSetShared(@"currentVoiceID", voiceID);
     MVSetShared(@"ttsProvider", @0);    // ★ 关键：切到 CosyVoice，克隆才会被用上
     MVSetShared(@"cosyModel", model);   // 复刻 / 合成统一用这个模型

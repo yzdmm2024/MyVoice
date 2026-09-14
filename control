@@ -1,8 +1,8 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 2.8.12
+Version: 2.8.13
 Architecture: iphoneos-arm64
-Description: 节约时间，打字即可。★ 2.8.12 ①新增阳江话/皖北话方言（接入选方言列表，CosyVoice 指令式生成，听感更真人）②修输入文字时键盘偶尔不弹（面板/FAB 拖动手势 cancelsTouchesInView=NO）。 ★ 2.8.11 修复 .aud 解码错误码 -2：SILK 分支在释放文件访问权限后才读原文件，fopen 必败；改为先拷贝到临时目录再解码，与其他分支一致。
+Description: 节约时间，打字即可。★ 2.8.13 ①阳江话/皖北话方言接入「选方言」列表（qwen-audio 模型，列表 21→23 种，听感更真人）②修克隆音色跨 App 不共享：微信克隆的嗓音 QQ 看不到，voices 改存全局共享域，微信/QQ 互通 ③保留 2.8.12 输入键盘偶尔不弹修复。 ★ 2.8.12 新增阳江话/皖北话（CosyVoice 指令式）+ 修键盘。 ★ 2.8.11 修复 .aud 解码错误码 -2。
 Maintainer: yzdmm2024
 Author: yzdmm2024
 Section: Tweaks

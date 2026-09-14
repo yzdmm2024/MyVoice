@@ -1153,7 +1153,7 @@
         NSMutableArray *keep = [NSMutableArray array];
         for (NSDictionary *x in MVVoices())
             if (![x[@"voiceID"] isEqualToString:vid]) [keep addObject:x];
-        MVSetShared(@"voices", keep);
+        MVSetSharedVoiceList(keep);   // ★ 2.8.13 跨 App 共享（微信/QQ 互通）
         if ([MVCurrentVoiceID() isEqualToString:vid]) {
             NSString *next = ((NSDictionary*)keep.firstObject)[@"voiceID"] ?: @"";
             MVSetShared(@"currentVoiceID", next);
