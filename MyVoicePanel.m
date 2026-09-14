@@ -626,7 +626,7 @@
             }]];
     }
     // ★ 2.8.29：内置音色（用内置样本克隆，真·阳江话）
-    [ac addAction:[UIAlertAction actionWithTitle:@"\U1F3A4 阳江话（内置样本克隆）" style:UIAlertActionStyleDefault
+    [ac addAction:[UIAlertAction actionWithTitle:@"阳江话（内置样本克隆）" style:UIAlertActionStyleDefault
         handler:^(UIAlertAction *a){
             MVSetShared(@"cosyDialect", @"");
             MVSetShared(@"mvBuiltinVoice", @"yangjiang");
@@ -644,7 +644,7 @@
                     [MyVoiceCloud clearSynthesisCache];
                     [self updateDialectButtons];
                     [self prewarmNow];
-                    [[MyVoiceManager shared] toast:@"\u2705 阳江话音色已就绪（内置样本克隆，真·阳江话）"];
+                    [[MyVoiceManager shared] toast:@"阳江话音色已就绪（内置样本克隆，真·阳江话）"];
                 });
             }];
         }]];
