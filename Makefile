@@ -8,7 +8,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME := MyVoice
 MyVoice_FILES := Tweak.x MyVoiceManager.m MyVoiceResolver.m MyVoiceEngine.m \
                  MyVoiceAVSEngine.m MyVoicePanel.m MyVoiceSender.m \
-                 MyVoiceRecorder.m MyVoiceDirectSend.m MyVoiceCloud.m MyVoiceCloneController.m \
+                 MyVoiceRecorder.m MyVoiceDirectSend.m MyVoiceCloud.m MyVoiceCloneController.m MyVoiceBuiltin.m \
                  MyVoiceLicense.m MyVoiceDiag.m
 MyVoice_FILES += MyVoiceSilk.c $(wildcard silk/src/*.c)
 MyVoice_FRAMEWORKS := Foundation UIKit AVFoundation CoreMedia Security AudioToolbox

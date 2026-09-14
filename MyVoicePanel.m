@@ -5,6 +5,7 @@
 #import "MyVoiceResolver.h"
 #import "MyVoiceCloneController.h"
 #import "MyVoiceCloud.h"
+#import "MyVoiceBuiltin.h"
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>   // ★ 2.8.7：列表内试听要播 PCM(WAV)
 
@@ -558,9 +559,14 @@
 - (void)updateDialectButtons {
     BOOL cosy = (MVTTSProvider() == 0);
     if (self.dialectBtn) {
-        NSString *d = MVGetStr(@"cosyDialect");
-        [self.dialectBtn setTitle:(d.length ? [NSString stringWithFormat:@"方言：%@", d] : @"无方言")
-                         forState:UIControlStateNormal];
+        NSString *bv = MVGetStr(@"mvBuiltinVoice");
+        if (bv.length) {
+            [self.dialectBtn setTitle:@"音色：阳江话(内置)" forState:UIControlStateNormal];
+        } else {
+            NSString *d = MVGetStr(@"cosyDialect");
+            [self.dialectBtn setTitle:(d.length ? [NSString stringWithFormat:@"方言：%@", d] : @"无方言")
+                             forState:UIControlStateNormal];
+        }
     }
     // ★ 2.8.7：千问的自定义指令写的是 qwenInstruction（对应官方 instructions 字段），
     //   克隆写的是 cosyInstruction（官方 instruction）。两者别混。
@@ -598,6 +604,7 @@
     [ac addAction:[UIAlertAction actionWithTitle:noneTitle style:UIAlertActionStyleDefault
         handler:^(UIAlertAction *a){
             MVSetShared(@"cosyDialect", @"");
+            MVSetShared(@"mvBuiltinVoice", @"");
             [self updateDialectButtons];
             [MyVoiceCloud clearSynthesisCache];
             [self prewarmNow];
@@ -611,12 +618,36 @@
                 //   语气（自定义指令 / 一键风格）由 MVCosyInstruction 自动拼在后半句，
                 //   所以这里绝不能去覆盖 cosyInstruction（旧写法会把用户写的语气顶掉）。
                 MVSetShared(@"cosyDialect", d);
+                MVSetShared(@"mvBuiltinVoice", @"");
                 [self updateDialectButtons];
                 [MyVoiceCloud clearSynthesisCache];   // 换了指令必须清缓存，否则命中旧音频
                 [self prewarmNow];
                 [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"已设为%@", d]];
             }]];
     }
+    // ★ 2.8.29：内置音色（用内置样本克隆，真·阳江话）
+    [ac addAction:[UIAlertAction actionWithTitle:@"\U1F3A4 阳江话（内置样本克隆）" style:UIAlertActionStyleDefault
+        handler:^(UIAlertAction *a){
+            MVSetShared(@"cosyDialect", @"");
+            MVSetShared(@"mvBuiltinVoice", @"yangjiang");
+            [[MyVoiceManager shared] toast:@"正在生成阳江话音色（首次需联网克隆，约 10~30 秒）…"];
+            [MyVoiceBuiltin ensureYangjiangCompletion:^(NSString *vid, NSError *e){
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (!vid) {
+                        MVSetShared(@"mvBuiltinVoice", @"");
+                        [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"阳江话生成失败：%@", e.localizedDescription ?: @"未知错误"]];
+                        return;
+                    }
+                    MVSetShared(@"currentVoiceID", vid);
+                    MVSetShared(@"ttsProvider", @0);
+                    MVSetShared(@"cosyModel", MVCosyModel());
+                    [MyVoiceCloud clearSynthesisCache];
+                    [self updateDialectButtons];
+                    [self prewarmNow];
+                    [[MyVoiceManager shared] toast:@"\u2705 阳江话音色已就绪（内置样本克隆，真·阳江话）"];
+                });
+            }];
+        }]];
     [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     ac.popoverPresentationController.sourceView = self.dialectBtn;
     ac.popoverPresentationController.sourceRect = self.dialectBtn.bounds;
@@ -1139,9 +1170,11 @@
         MVSetShared(@"ttsProvider", @1);
         MVSetShared(@"qwenVoice", self.selectedVoiceID);
         MVSetShared(@"qwenModel", d[@"model"] ?: @"qwen3-tts-flash");
+        MVSetShared(@"mvBuiltinVoice", @"");
     } else {
         MVSetShared(@"ttsProvider", @0);
         MVSetShared(@"currentVoiceID", self.selectedVoiceID);
+        MVSetShared(@"mvBuiltinVoice", [self.selectedVoiceID isEqualToString:[MyVoiceBuiltin yangjiangVoiceID]] ? @"yangjiang" : @"");
     }
     [self.voiceTable reloadData];
     [self hidePicker];
