@@ -40,6 +40,9 @@
 // 带类加载重试）。供 Tweak.x 在 host-ready 时调用，需公开声明。
 + (void)installQQHooksIfNeeded;
 
+// ★ 2.8.24：tweak 启动即挂抖音半自动直发钩子（startRecord/record/sendRecordMessage…，带类加载重试）。
++ (void)installDouyinHooksIfNeeded;
+
 // 无界面直发：TTS 必须已经装填进录音管线（MyVoiceRecorder feedPCM:）。
 // 直接调微信内部接口开始录音 → 轮询确认录音真的被接管 → 到时长后停止并发送。
 // completion(ok, reason)：ok=NO 时调用方应回退成「手动按住说话」提示。
