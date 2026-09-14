@@ -26,7 +26,7 @@ static NSError* MVBErr(NSString *msg) {
         for (NSDictionary *x in MVVoices())
             if ([x isKindOfClass:[NSDictionary class]] && [x[@"voiceID"] isEqualToString:vid]) { found = YES; break; }
         if (found) { completion(vid, nil); return; }
-        [self addYangjiangToVoices:vid];
+        [self addYangjiangToVoices:vid model:nil];
         completion(vid, nil); return;
     }
     NSData *mp3 = [[NSData alloc] initWithBase64EncodedString:kMVYangjiangMp3B64 options:0];
