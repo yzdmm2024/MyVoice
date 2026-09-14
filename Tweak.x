@@ -70,7 +70,10 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.2.10（新增方言音色/修键盘不弹/QQ 显示）");
+        MVLog(@"载入 我的语音 v2.8.12（新增阳江话/皖北话方言 + 修输入键盘偶尔不弹）");
+        MVLog(@"宿主 App：%@（版本 %@）",
+              [NSBundle mainBundle].bundleIdentifier ?: @"?",
+              [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");
         MVLog(@"日志文件：%@", MVLogFilePath() ?: @"(不可写，只能用 syslog)");
     }
 
