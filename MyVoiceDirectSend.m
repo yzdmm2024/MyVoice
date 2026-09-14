@@ -3,6 +3,7 @@
 #import "MyVoiceResolver.h"
 #import "MyVoiceRecorder.h"
 #import "MyVoiceManager.h"
+#import "MyVoiceCloud.h"
 #import <AudioToolbox/AudioToolbox.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
