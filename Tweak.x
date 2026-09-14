@@ -4,6 +4,7 @@
 #import "MyVoiceRecorder.h"
 #import <objc/runtime.h>
 #import <UIKit/UIKit.h>
+#import "MyVoiceDiag.h"
 
 // ============================================================
 // hook 一：会话捕获（2.0.14 起）
@@ -70,7 +71,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.8.16（QQ 全自动发送：点合成语音时直接在「按住说话」按钮上模拟按下，由 QQ 自行创建 operator/recorder）");
+        MVLog(@"载入 我的语音 v2.8.17（真机抓包诊断版：仅增强 [mvdiag] 日志，不改发送行为）");
         MVLog(@"宿主 App：%@（版本 %@）",
               [NSBundle mainBundle].bundleIdentifier ?: @"?",
               [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");
@@ -89,9 +90,67 @@
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ [MyVoiceManager setupWhenHostReady]; });
 
+    // ④ 2.8.17 真机抓包：QQ 内枚举相关类（仅打印，不改行为）
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (mvDiagIsQQ()) {
+            mvDiagDumpClasses();
+            MVLog(@"[mvdiag] 抓包就绪：请手动按住「按住说话」2秒再松开，然后点「合成语音」自动发送");
+        }
+    });
+
     // ③ AudioQueueNewInput 补丁：与宿主无关，随时可装；微信冷启动 CoreAudio 就绪有先后，故重试
     for (int i = 0; i < 5; i++) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((0.5 + i * 1.0) * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [MyVoiceRecorder install]; });
     }
 }
+
+// ============================================================
+// 2.8.17 真机抓包：记录「按住说话」真实按钮类 + 其手势/action（仅打印）
+//   关键：QQ 多半用 UILongPressGestureRecognizer 检测按下，而手势只由 UIKit
+//   事件分发触发，直接调 [btn touchesBegan:] 不会让它 fire —— 这正是自动发送失效的根因。
+//   这里在真机上把"按钮类 + 手势类 + action"原样打印出来，供下一步修复。
+// ============================================================
+%hook UIApplication
+- (void)sendEvent:(UIEvent *)event {
+    if (mvDiagIsQQ()) {
+        NSSet *touches = [event touchesForWindow:self.keyWindow] ?: event.allTouches;
+        for (UITouch *tc in touches) {
+            if (tc.phase == UITouchPhaseBegan && tc.view) {
+                UIView *v = tc.view;
+                BOOL likely = NO; UIView *p = v; int d = 0;
+                while (p && d < 5) {
+                    NSString *pc = NSStringFromClass([p class]);
+                    if ([pc containsString:@"Record"] || [pc containsString:@"Ptt"] ||
+                        [pc containsString:@"Input"] || [pc containsString:@"Audio"] ||
+                        [pc containsString:@"Voice"] || [pc containsString:@"Speak"] ||
+                        [pc containsString:@"Press"] || [pc containsString:@"Bar"] ||
+                        [pc containsString:@"Btn"] || [pc containsString:@"Button"] ||
+                        [pc containsString:@"Tool"]) { likely = YES; break; }
+                    p = [p superview]; d++;
+                }
+                if (likely) {
+                    NSMutableString *line = [NSMutableString stringWithFormat:
+                        @"[mvdiag] 触摸命中 %@ (window=%@)", NSStringFromClass([v class]),
+                        (v.window ? NSStringFromClass([v.window class]) : (id)[NSNull null])];
+                    UIView *pp = v; int dd = 0;
+                    while ((pp = [pp superview]) && dd < 4) {
+                        [line appendFormat:@" <- %@", NSStringFromClass([pp class])]; dd++;
+                    }
+                    if (v.gestureRecognizers.count) {
+                        [line appendString:@" | GR:"];
+                        for (UIGestureRecognizer *g in v.gestureRecognizers)
+                            [line appendFormat:@" %@", mvDiagGRInfo(g)];
+                    }
+                    if ([v isKindOfClass:[UIControl class]])
+                        [line appendFormat:@" | isUIControl=Y allTargets=%lu",
+                            (unsigned long)[(UIControl *)v allTargets].count];
+                    MVLog(@"%@", line);
+                }
+            }
+        }
+    }
+    %orig;
+}
+%end

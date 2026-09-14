@@ -6,6 +6,7 @@
 #import <AudioToolbox/AudioToolbox.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import "MyVoiceDiag.h"
 
 // Substrate / ellekit 均提供（同 MSHookFunction）
 extern void MSHookMessageEx(Class _class, SEL message, IMP hook, IMP *old);
@@ -413,8 +414,18 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
     NSArray *btnNames = btnCls ? @[NSStringFromClass(btnCls)] : @[];
     if (!btnNames.count) { MVLog(@"[direct] QQ 自动：未找到 QQPttRecordBtn 类"); return nil; }
     id found = MVFindQQRecordButtonInView(vc.view, btnNames);
-    if (found) MVLog(@"[direct] QQ 自动：找到录音按钮 %@", NSStringFromClass(object_getClass(found)));
-    else MVLog(@"[direct] QQ 自动：当前聊天页视图树内未找到 QQPttRecordBtn");
+    if (found) {
+        UIView *fv = (UIView *)found;
+        MVLog(@"[direct] QQ 自动：找到录音按钮 %@（isUIControl=%@, gestures=%lu）",
+              NSStringFromClass(object_getClass(found)),
+              [found isKindOfClass:[UIControl class]] ? @"Y" : @"N",
+              (unsigned long)fv.gestureRecognizers.count);
+        for (UIGestureRecognizer *g in fv.gestureRecognizers)
+            MVLog(@"[mvdiag]   按钮手势：%@", mvDiagGRInfo(g));
+    } else {
+        MVLog(@"[direct] QQ 自动：当前聊天页视图树内未找到 QQPttRecordBtn —— Dump 真实视图树");
+        MVDebugDumpInputTree(vc.view);
+    }
     return found;
 }
 
