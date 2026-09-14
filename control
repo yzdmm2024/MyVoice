@@ -1,8 +1,8 @@
 Package: com.yzdmm2024.myvoice
 Name: 我的语音
-Version: 2.8.25
+Version: 2.8.26
 Architecture: iphoneos-arm64
-Description: 节约时间，打字即可。★ 2.8.25 修抖音「自己就中断 / 停不下来 / 未识别聊天对象」：①去掉自动松手——抖音改为纯半自动（用户掌控松手时机，TTS 仅后台合成、松手瞬间替换文件，不再强松手导致中断）；②点面板「合成语音」在抖音进程里不再走微信发送逻辑（之前因抖音无 wxid 报「未识别」），改为「授权本次抖音 TTS 接管」+ 引导去长按语音键；③激活改用显式 arming 门控（替代 lastComposedText 全局残留），未授权时抖音完全正常、不会被劫持，发完即失效需重新点。★ 2.8.24 抖音半自动语音发送（文件替换法）：长按抖音语音键 → MyVoice 合成 TTS 编码 m4a → 松手时 hook sendRecordMessageIfNeededWithFilePath: 把录音文件替换成 TTS 发出。★ 2.8.23 修 QQ 全自动「一直录音、停不下来、无法取消」：停止/取消改模拟松手调 QQPushToTalkView.touchEnd:（手动松手真实入口）。★ 2.8.21 修 QQ 全自动类名（QQPttRecordOperator / didStartRecordAsync:）。
+Description: 节约时间，打字即可。★ 2.8.26 修：①克隆音色在抖音发出却是普通话——抖音 arming 改用面板实际选中音色、合成按音色自身绑定的服务商路由（绕过全局 ttsProvider，千问默认不再覆盖克隆）；②抖音 TTS 就绪后系统语音播报「可以松手了」+震动，明确提示松手时机。★ 2.8.25 抖音纯半自动（用户掌控松手，TTS 松手瞬间替换文件）★ 2.8.24 抖音文件替换法发送 ★ 2.8.23 修 QQ 全自动停不下来（模拟松手调 touchEnd:）。
 Maintainer: yzdmm2024
 Author: yzdmm2024
 Section: Tweaks

@@ -843,10 +843,22 @@ static void MVDYTryInstallHooks(void) {
     }
 }
 
-// 合成 TTS → 编码 m4a → 准备就绪后自动松手
+// 合成 TTS → 编码 m4a → 就绪后语音提示用户松手（半自动，松手时机由用户掌控）
 + (void)mvDouyinBeginTTS:(NSString*)text voice:(NSString*)voice {
     NSString *vid = voice.length ? voice : MVCurrentVoiceID();
-    [[MyVoiceCloud shared] synthesizeText:text voiceID:vid completion:^(NSData *pcm, NSError *e){
+    if (!vid.length) {
+        MVLog(@"[direct] 抖音：无音色（未选克隆/千问），放弃 TTS 替换");
+        @synchronized([MyVoiceDirectSend class]) { g_mvDouyinActive = NO; }
+        return;
+    }
+    // ★ 2.8.26：按该 voiceID 实际绑定的服务商路由，不看全局 ttsProvider。
+    //   否则 ttsProvider=1（千问默认）会把克隆 voiceID 送去千问 → 千问不认识 → 退回普通话。
+    NSInteger provider = 1;
+    for (NSDictionary *d in MVVoices()) {
+        if ([d[@"voiceID"] isEqualToString:vid]) { provider = [d[@"provider"] integerValue]; break; }
+    }
+    MVLog(@"[direct] 抖音：合成 TTS voice=%@ provider=%ld", vid, (long)provider);
+    void (^done)(NSData*, NSError*) = ^(NSData *pcm, NSError *e){
         if (!pcm.length) {
             MVLog(@"[direct] 抖音 TTS 合成失败：%@", e.localizedDescription ?: @"未知");
             @synchronized([MyVoiceDirectSend class]) { g_mvDouyinActive = NO; }
@@ -856,9 +868,23 @@ static void MVDYTryInstallHooks(void) {
         if (!m4a) { MVLog(@"[direct] 抖音 m4a 编码失败"); return; }
         @synchronized([MyVoiceDirectSend class]) { g_mvDouyinTTSPath = m4a; g_mvDouyinTTSReady = YES; }
         MVLog(@"[direct] 抖音 TTS 就绪 m4a=%@ (≈%.2fs) —— 等待用户松手即替换", m4a, pcm.length / 32000.0);
-        // ★ 2.8.25：不再自动松手。自行决定是否松手由用户掌控（半自动），避免「自己中断 / 停不下来」。
-        //   若用户松手早于 TTS 就绪：send 钩时 m4a 未就位 → 不替换 → 发原生录音（安全降级）。
-    }];
+        // ★ 2.8.26：就绪即播报「可以松手了」+ 震动，明确告诉用户何时松手（不再无提示盲等）
+        MVOnMain(^{
+            @try {
+                AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
+                AVSpeechUtterance *u = [AVSpeechUtterance speechUtteranceWithString:@"可以松手了"];
+                u.voice = [AVSpeechSynthesisVoice voiceWithLanguage:@"zh-CN"];
+                u.rate  = AVSpeechUtteranceDefaultSpeechRate;
+                u.volume = 1.0;
+                static AVSpeechSynthesizer *gMVSyn = nil;
+                static dispatch_once_t once;
+                dispatch_once(&once, ^{ gMVSyn = [[AVSpeechSynthesizer alloc] init]; });
+                [gMVSyn speakUtterance:u];
+            } @catch (NSException *ex) { MVLog(@"[direct] 抖音 松手提示异常 %@", ex.reason); }
+        });
+    };
+    if (provider == 0) [[MyVoiceCloud shared] synthesizeCosyText:text voiceID:vid completion:done];
+    else                [[MyVoiceCloud shared] synthesizeQwenText:text voiceID:vid completion:done];
 }
 
 // 自动松手（主线程调 stopRecordWithInTranslate:0 = 区内松手=发送）

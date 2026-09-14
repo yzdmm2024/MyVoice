@@ -75,9 +75,12 @@ static void MVSettingsChanged(CFNotificationCenterRef center, void *observer,
     // ★ 2.8.25：抖音进程里不走微信式发送（抖音无 wxid、无法程序化 startRecord）。
     //   点「合成语音」= 授权本次抖音 TTS 接管，引导用户去抖音长按语音键（半自动替换）。
     if (mvDiagIsDouyin()) {
-        NSString *vid = (MVTTSProvider() == 1) ? MVQwenVoice() : MVCurrentVoiceID();
+        // ★ 2.8.26：用面板实际选中的音色，而不是按全局 ttsProvider 退化到千问默认（普通话）。
+        //   否则克隆音色会被 MVQwenVoice() 覆盖，发出去的永远是普通话。
+        NSString *vid = [[MyVoicePanel shared] resolvedVoiceID];
+        if (!vid.length) vid = (MVTTSProvider() == 1) ? MVQwenVoice() : MVCurrentVoiceID();
         [MyVoiceDirectSend mvDouyinArmWithText:text voice:vid];
-        [[MyVoiceManager shared] toast:@"抖音 TTS 已就绪：去聊天页长按语音键，将自动发出 TTS"];
+        [[MyVoiceManager shared] toast:@"抖音 TTS 已就绪：去聊天页长按语音键，听到『可以松手了』即松手发送"];
         return;
     }
     // 聊天对象：currentTalker 内部已经把「聊天页实时解析 → hook 捕获 → 落盘」串起来了。
