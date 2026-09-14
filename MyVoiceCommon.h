@@ -271,6 +271,19 @@ static inline NSInteger MVEngineMode(void){ id v = MVGet(@"engineMode"); return 
 // 2.2.1 起默认改为千问，避免新用户没克隆音色时直接合成失败。
 static inline NSInteger MVTTSProvider(void){ id v = MVGet(@"ttsProvider"); return v ? [v integerValue] : 1; }
 
+// ★ 2.8.28：按 voiceID 自身所属服务商路由（不再依赖全局 ttsProvider）。
+//   选中克隆/设计音色就走 CosyVoice，选中千问预置就走 Qwen；
+//   彻底根治「选中克隆音色却因全局开关错位而发出普通话」。
+static inline NSInteger MVVoiceProvider(NSString *vid) {
+    if (!vid.length) return MVTTSProvider();
+    for (NSDictionary *d in MVQwenVoiceList())
+        if ([d[@"voiceID"] isEqualToString:vid]) return 1;
+    for (NSDictionary *d in MVVoices())
+        if ([d[@"voiceID"] isEqualToString:vid]) return ([d[@"provider"] integerValue] == 1) ? 1 : 0;
+    return MVTTSProvider();
+}
+
+
 // 千问 Qwen-TTS 模型名（qwen3-tts-flash 支持全部 48 个预置音色；老 qwen-tts 只支持前 4 个）
 static inline NSString* MVQwenModel(void) {
     NSString *v = MVGetStr(@"qwenModel");
