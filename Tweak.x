@@ -71,7 +71,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.8.18（QQ 全自动发送：实机 frida 抓包确认真链路，点合成语音直接 startRecordAsync 开始 + sendRecordData 发送，无需手动按住）");
+        MVLog(@"载入 我的语音 v2.8.19（QQ 全自动发送：钩住 QQPushToTalkView 捕获视图实例，零遍历、不闪退；点合成语音直接 startRecordAsync 开始 + sendRecordData 发送，无需手动按住）");
         MVLog(@"宿主 App：%@（版本 %@）",
               [NSBundle mainBundle].bundleIdentifier ?: @"?",
               [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");

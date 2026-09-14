@@ -318,6 +318,37 @@ static id  g_mvQQRecorder = nil;   // 最近一次录音的 QQPttRecorder（每�
 static IMP g_mvOrigQQDidTrig = NULL;
 static IMP g_mvOrigQQCreateRec = NULL;
 
+// ★ 2.8.19：直接捕获 QQPushToTalkView 实例（不再递归遍历 vc.view.subviews —— 该遍历会在
+//   QQ 切换语音模式时碰到正在释放的视图，for...in 拿到悬空数组 → EXC_BAD_ACCESS 闪退）。
+//   与 g_mvQQOperator/g_mvQQRecorder 同思路：在视图出现/开始录音时由钩子扣留 self。
+static id  g_mvQQPushToTalkView = nil;   // 当前语音模式下的「按住说话」视图（UIKit 持有，不 CFRetain）
+static IMP g_mvOrigQQPTVDidMoveToWindow = NULL;
+static IMP g_mvOrigQQPTVStartRecord = NULL;
+static BOOL g_mvQQPTVHookInstalled = NO;
+
+static void MVQQPTVDidMoveToWindowHook(id self, SEL _cmd, UIWindow *window) {
+    @synchronized([MyVoiceDirectSend class]) { g_mvQQPushToTalkView = window ? self : nil; }
+    if (window) MVLog(@"[direct] 已捕获 QQPushToTalkView %p（didMoveToWindow）", self);
+    if (g_mvOrigQQPTVDidMoveToWindow)
+        ((void(*)(id, SEL, UIWindow*))g_mvOrigQQPTVDidMoveToWindow)(self, _cmd, window);
+}
+static void MVQQPTVStartRecordHook(id self, SEL _cmd) {
+    @synchronized([MyVoiceDirectSend class]) { g_mvQQPushToTalkView = self; }
+    MVLog(@"[direct] 已捕获 QQPushToTalkView %p（startRecordAsync）", self);
+    if (g_mvOrigQQPTVStartRecord)
+        ((void(*)(id, SEL))g_mvOrigQQPTVStartRecord)(self, _cmd);
+}
+// 懒安装：QQPushToTalkView 类可能到进入语音模式才加载，故每次查找时重试（类不存在则跳过）
+static void ensureQQPTVHook(void) {
+    if (g_mvQQPTVHookInstalled) return;
+    Class vcls = NSClassFromString(@"QQPushToTalkView");
+    if (!vcls) return;
+    MSHookMessageEx(vcls, @selector(didMoveToWindow), (IMP)MVQQPTVDidMoveToWindowHook, (IMP *)&g_mvOrigQQPTVDidMoveToWindow);
+    MSHookMessageEx(vcls, @selector(startRecordAsync), (IMP)MVQQPTVStartRecordHook, (IMP *)&g_mvOrigQQPTVStartRecord);
+    g_mvQQPTVHookInstalled = YES;
+    MVLog(@"[direct] QQ QQPushToTalkView 钩子已安装");
+}
+
 static void MVQQOperatorDidTrigHook(id self, SEL _cmd) {
     @synchronized([MyVoiceDirectSend class]) {
         if (g_mvQQOperator != self) {
@@ -410,76 +441,51 @@ static id MVQQCreateRecorderHook(id self, SEL _cmd) {
 //            → NTAIOChat.NTAIOPttRecordOperator -sendAudioWithAudioModel:completion:（真发）
 //   故「自动发送」= 直接调 startRecordAsync 开始 + 喂完 TTS 后调 sendRecordData 发送，零手动。
 + (id)mvQQFindPushToTalkView {
-    UIViewController *vc = nil;
-    @try { vc = [MyVoiceResolver currentChatVC]; } @catch (NSException *e) { vc = nil; }
-    if (!vc || !vc.view) return nil;
-    Class vcls = NSClassFromString(@"QQPushToTalkView");
-    if (!vcls) { MVLog(@"[direct] QQ 自动：未找到 QQPushToTalkView 类"); return nil; }
-    __block id found = nil;
-    void (^walk)(UIView*) = ^(UIView *root){
-        if (found) return;
-        if ([root isKindOfClass:vcls]) { found = root; return; }
-        for (UIView *sub in root.subviews) walk(sub);
-    };
-    walk(vc.view);
-    if (found) MVLog(@"[direct] QQ 自动：找到 QQPushToTalkView %p", found);
-    else { MVLog(@"[direct] QQ 自动：当前非语音模式（无 QQPushToTalkView）"); MVDebugDumpInputTree(vc.view); }
-    return found;
+    ensureQQPTVHook();   // 懒安装（类可能刚加载）
+    @synchronized([MyVoiceDirectSend class]) {
+        id v = g_mvQQPushToTalkView;
+        if (v && [v isKindOfClass:NSClassFromString(@"QQPushToTalkView")] && [v window] != nil) {
+            MVLog(@"[direct] QQ 自动：复用已捕获且在窗口的 QQPushToTalkView %p", v);
+            return v;
+        }
+    }
+    MVLog(@"[direct] QQ 自动：尚未捕获到 QQPushToTalkView（需先处于语音模式，或先点一次「按住说话」）");
+    return nil;
 }
 
-// 尽力切到语音模式（让「按住说话」/QQPushToTalkView 出现）。找输入栏里类含 voice/record/ptt/switch 的
-// UIButton 触发一次 TouchUpInside。找不到返回 NO。
+// 切到语音模式：★ 2.8.19 起不再递归遍历视图树（会闪退），改为返回 NO 由上层安全退回手动。
+//   后续若需自动切换，应改用「捕获输入栏按钮」钩子，而非遍历 vc.view.subviews。
 + (BOOL)mvQQSwitchToVoiceMode {
-    UIViewController *vc = nil;
-    @try { vc = [MyVoiceResolver currentChatVC]; } @catch (NSException *e) { vc = nil; }
-    if (!vc || !vc.view) return NO;
-    __block UIButton *toggle = nil;
-    void (^walk)(UIView*) = ^(UIView *root){
-        if (toggle) return;
-        if ([root isKindOfClass:[UIButton class]]) {
-            NSString *cn = NSStringFromClass(object_getClass(root)) ?: @"";
-            if ([cn rangeOfString:@"voice"  options:NSCaseInsensitiveSearch].location != NSNotFound ||
-                [cn rangeOfString:@"record" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-                [cn rangeOfString:@"ptt"    options:NSCaseInsensitiveSearch].location != NSNotFound ||
-                [cn rangeOfString:@"switch" options:NSCaseInsensitiveSearch].location != NSNotFound) {
-                toggle = (UIButton*)root; return;
-            }
-        }
-        for (UIView *sub in root.subviews) walk(sub);
-    };
-    walk(vc.view);
-    if (toggle) {
-        @try { [toggle sendActionsForControlEvents:UIControlEventTouchUpInside]; MVLog(@"[direct] QQ 自动：已触发语音模式切换按钮"); return YES; }
-        @catch (NSException *e) { MVLog(@"[direct] QQ 自动：切语音模式异常 %@", e.reason); }
-    }
+    MVLog(@"[direct] QQ 自动：跳过自动切语音模式（避免遍历视图树闪退），请先处于语音模式");
     return NO;
 }
 
-// 自动开始录音：优先 QQPushToTalkView.startRecordAsync（真链路入口，零手动）；
-// 键盘模式先尽力切语音模式再试；都失败退回旧版「合成触摸按钮」兜底。
+// 自动开始录音：直接调已捕获的 QQPushToTalkView.startRecordAsync（真链路入口，零手动）。
+// ★ 2.8.19：不再递归遍历视图树 / 不再阻塞主线程 usleep / 不再合成触摸按钮
+//   （那套在 QQ 切换语音模式时会遍历到正在释放的视图 → 闪退）。拿不到捕获视图就返回 nil，
+//   由上层 sendArmedTo 安全退回「请手动按住」提示，绝不崩溃。
 + (id)qqAutoStartRecord:(BOOL*)outStarted {
     if (outStarted) *outStarted = NO;
     id view = [self mvQQFindPushToTalkView];
-    if (!view && [self mvQQSwitchToVoiceMode]) {
-        for (int i = 0; i < 10 && !view; i++) { usleep(100 * 1000); view = [self mvQQFindPushToTalkView]; }
+    if (!view) {
+        MVLog(@"[direct] QQ 自动：无可用 QQPushToTalkView —— 退回手动按住");
+        return nil;
     }
-    if (view) {
-        [MyVoiceRecorder beginQueueBinding];
-        SEL sel = NSSelectorFromString(@"startRecordAsync");
-        if ([view respondsToSelector:sel]) {
-            @try {
-                #pragma clang diagnostic push
-                #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                [view performSelector:sel];
-                #pragma clang diagnostic pop
-                id op = [MyVoiceDirectSend stashedQQOperator];
-                if (!op) { usleep(50 * 1000); op = [MyVoiceDirectSend stashedQQOperator]; }
-                if (op) { if (outStarted) *outStarted = YES; MVLog(@"[direct] QQ 自动：startRecordAsync 已触发 Operator=%p", op); return op; }
-            } @catch (NSException *e) { MVLog(@"[direct] QQ 自动：startRecordAsync 异常 %@", e.reason); }
-        }
+    [MyVoiceRecorder beginQueueBinding];
+    SEL sel = NSSelectorFromString(@"startRecordAsync");
+    if ([view respondsToSelector:sel]) {
+        @try {
+            #pragma clang diagnostic push
+            #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [view performSelector:sel];
+            #pragma clang diagnostic pop
+            id op = [MyVoiceDirectSend stashedQQOperator];
+            if (!op) { usleep(50 * 1000); op = [MyVoiceDirectSend stashedQQOperator]; }
+            if (op) { if (outStarted) *outStarted = YES; MVLog(@"[direct] QQ 自动：startRecordAsync 已触发 Operator=%p", op); return op; }
+        } @catch (NSException *e) { MVLog(@"[direct] QQ 自动：startRecordAsync 异常 %@", e.reason); }
     }
-    MVLog(@"[direct] QQ 自动：无 startRecordAsync 路径，退回合成触摸按钮方案");
-    return [self qqAutoPressRecordButton:outStarted];
+    MVLog(@"[direct] QQ 自动：startRecordAsync 未生效 —— 退回手动按住");
+    return nil;
 }
 
 // 结束并发送：真链是 QQPttRecorder -sendRecordData（无参）。退化 stopRecord。
