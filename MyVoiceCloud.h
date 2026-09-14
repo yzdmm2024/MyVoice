@@ -45,7 +45,7 @@
 // 声音复刻：把一段参考音频（本地文件路径）上传 OSS → 调 customization → 回调 voice_id
 - (void)cloneVoiceWithName:(NSString*)name
               referenceAudioPath:(NSString*)path
-                      completion:(void(^)(NSString* voiceID, NSError* err))completion;
+                      completion:(void(^)(NSString *voiceID, NSString *model, NSError *err))completion;
 
 // 声音设计：只给一句文字描述（如"沉稳的中年男性播音员"）→ 调 customization 的
 // voice_prompt 分支 → 回调 voice_id。不需要参考音频、不需要录音、不需要 OSS。
