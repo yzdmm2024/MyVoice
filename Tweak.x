@@ -72,7 +72,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.8.35（★ 「自建服务器」开关/地址已搬到【系统设置 → 我的语音 → 自建服务器】，悬浮面板点了只显示状态并指路；删除用不到的「对象存储 OSS」整组；并修「设置页改了不生效」—— 自建键改为 jbroot 共享域优先读取，且面板不再写这三个键。★ 2.8.33 新增「自建服务器」开关：本地 CosyVoice + 阿里云 ECS 中转免费克隆音色；开启后 CosyVoice 族走本地 server.py 不再耗额度。★ 2.8.32 修「千问合成失败·url error!」：合成端点改为按【模型家族】分流 —— Qwen-TTS(qwen3-tts-*) 走 multimodal-generation，Qwen-Audio-TTS(qwen-audio-3.0-tts-*) / CosyVoice 走 /services/audio/tts/SpeechSynthesizer；旧版按 provider 分流，千问克隆音色被送错端点 → 服务端 400 url error，与充值/额度无关。同时修好预置音色选「可调版」不生效、报错信息带端点）");
+        MVLog(@"载入 我的语音 v2.8.36（★ 2.8.36 修自建服务器地址漏 http:// 时合成报「不支持的URL」：MVSelfHostURL 自动补 scheme。 「自建服务器」开关/地址已搬到【系统设置 → 我的语音 → 自建服务器】，悬浮面板点了只显示状态并指路；删除用不到的「对象存储 OSS」整组；并修「设置页改了不生效」—— 自建键改为 jbroot 共享域优先读取，且面板不再写这三个键。★ 2.8.33 新增「自建服务器」开关：本地 CosyVoice + 阿里云 ECS 中转免费克隆音色；开启后 CosyVoice 族走本地 server.py 不再耗额度。★ 2.8.32 修「千问合成失败·url error!」：合成端点改为按【模型家族】分流 —— Qwen-TTS(qwen3-tts-*) 走 multimodal-generation，Qwen-Audio-TTS(qwen-audio-3.0-tts-*) / CosyVoice 走 /services/audio/tts/SpeechSynthesizer；旧版按 provider 分流，千问克隆音色被送错端点 → 服务端 400 url error，与充值/额度无关。同时修好预置音色选「可调版」不生效、报错信息带端点）");
         MVLog(@"宿主 App：%@（版本 %@）",
               [NSBundle mainBundle].bundleIdentifier ?: @"?",
               [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");
