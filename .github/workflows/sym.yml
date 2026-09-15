@@ -1,0 +1,42 @@
+name: Sym-Build (任意 ref · 未 strip dylib)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'git ref / sha to build'
+        required: true
+        default: main
+      label:
+        description: 'artifact label (version name)'
+        required: true
+        default: sym
+
+jobs:
+  build:
+    runs-on: macos-14
+    env:
+      THEOS: ${{ github.workspace }}/theos
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install deps
+        run: brew install dpkg ldid
+      - name: Setup theos
+        run: git clone --recursive https://github.com/theos/theos.git "$THEOS"
+      - name: Vendor Flite (best effort)
+        run: bash flite/vendor.sh || true
+      - name: Build dylib unstripped
+        run: make THEOS_PACKAGE_SCHEME=rootless || true
+      - name: Collect unstripped dylib
+        if: always()
+        run: |
+          mkdir -p out
+          find .theos -name 'MyVoice.dylib' -exec cp -v {} out/ \;
+          ls -la out || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sym-${{ inputs.label }}
+          path: out/*.dylib
+          if-no-files-found: warn
