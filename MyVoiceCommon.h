@@ -1465,6 +1465,16 @@ static inline NSString* MVSelfHostURL(void) {
     id raw = MVSelfHostGet(@"selfHostURL");
     NSString *v = [raw isKindOfClass:[NSString class]] ? raw : (raw ? [raw description] : @"");
     if (!v.length) return @"http://127.0.0.1:8000";   // 默认本机调试（手机与服务器同网 / 隧道）
+    // ★ 2.8.39：清洗用户误输入的非法字符（全角冒号/点、首尾空格、零宽字符）。
+    //   从聊天复制地址常带全角冒号「：」或前后空格，使 NSURL 解析失败报「不支持的URL」。
+    NSMutableString *mv = [NSMutableString stringWithString:v];
+    [mv replaceOccurrencesOfString:@"：" withString:@":" options:0 range:NSMakeRange(0, mv.length)];
+    [mv replaceOccurrencesOfString:@"．" withString:@"." options:0 range:NSMakeRange(0, mv.length)];
+    [mv replaceOccurrencesOfString:@" " withString:@"" options:0 range:NSMakeRange(0, mv.length)];
+    [mv replaceOccurrencesOfString:@"\t" withString:@"" options:0 range:NSMakeRange(0, mv.length)];
+    [mv replaceOccurrencesOfString:@"\u200b" withString:@"" options:0 range:NSMakeRange(0, mv.length)];
+    [mv replaceOccurrencesOfString:@"\ufeff" withString:@"" options:0 range:NSMakeRange(0, mv.length)];
+    v = [mv stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     // ★ 2.8.36：用户常只填 ip:port（如 101.200.189.251:18000）漏掉 http://，
     //   导致 NSURL 解析失败、合成报「不支持的URL」。这里统一兜底补 scheme。
     if (![v hasPrefix:@"http://"] && ![v hasPrefix:@"https://"])
