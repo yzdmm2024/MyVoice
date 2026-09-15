@@ -15,9 +15,6 @@
 // ★ 2.2.7：本方法自带【结果缓存】（key = 服务商|模型|音色|语气|语速|文字）。
 //   命中缓存时**零网络请求**直接回调 —— 这是消除「点发送后还要等合成」的关键。
 - (void)synthesizeText:(NSString*)text voiceID:(NSString*)voiceID completion:(void(^)(NSData* pcm, NSError* err))completion;
-// ★ 2.8.37：同步自建服务器音色库（GET {selfHostURL}/voicebank），结果写入共享域 selfHostVoices
-- (void)syncServerVoicesWithCompletion:(void(^)(NSInteger count, NSError* err))completion;
-
 // ★ 2.8.26：按音色自身绑定的服务商分流（绕过全局 ttsProvider，杜绝克隆音色被千问默认覆盖成普通话）。
 //   抖音半自动直发走这两条，确保用户选的克隆/千问音色被真实使用。
 - (void)synthesizeCosyText:(NSString*)text voiceID:(NSString*)voiceID completion:(void(^)(NSData*,NSError*))completion;

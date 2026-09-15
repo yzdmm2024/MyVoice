@@ -54,7 +54,7 @@
 			<key>label</key>
 			<string>合成引擎</string>
 			<key>footerText</key>
-			<string>离线＝系统中文语音（机器人音，免费、不联网）；云端＝联网合成。选「云端」后请在下面「云端服务」里二选一；若你开了下面「自建服务器」，克隆音色会改走你自己的电脑（免费）。</string>
+			<string>离线＝系统中文语音（机器人音，免费、不联网）；云端＝联网合成。选「云端」后在下面「发音通道」里二选一。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -83,9 +83,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>发音通道（三选一 · 互斥）</string>
+			<string>发音通道（二选一 · 互斥）</string>
 			<key>footerText</key>
-			<string>这里决定「声音从哪来」。三条路互斥，同一时刻只会走一条：① 自建·免费＝你自己电脑上跑 CosyVoice，免费、完全不碰阿里云、不耗 API Key；② 云端Cosy＝阿里云百炼的 CosyVoice，适合克隆/设计音色，按量计费；③ 云端千问＝阿里云百炼官方预置音色，不用克隆、开箱即用，按量计费。⚠️ 选①时千问一律不参与，所以不会出现"开了免费模式还在扣额度"。</string>
+			<string>这里决定「声音从哪来」。两条路互斥，同一时刻只会走一条：① 云端Cosy＝阿里云百炼的 CosyVoice，适合克隆 / 设计音色，按量计费；② 云端千问＝阿里云百炼官方预置音色，不用克隆、开箱即用，按量计费。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -96,13 +96,11 @@
 			<string>ttsChannel</string>
 			<key>validValues</key>
 			<array>
-				<integer>0</integer>
 				<integer>1</integer>
 				<integer>2</integer>
 			</array>
 			<key>validTitles</key>
 			<array>
-				<string>自建·免费</string>
 				<string>云端Cosy</string>
 				<string>云端千问</string>
 			</array>
@@ -112,44 +110,6 @@
 			<string>com.yzdmm2024.myvoice/settings</string>
 		</dict>
 
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>自建服务器（仅通道选「自建·免费」时生效）</string>
-			<key>footerText</key>
-			<string>通道选「自建·免费」后，克隆 / CosyVoice 音色改走你自建的服务器（本地电脑跑模型 + 阿里云 ECS 中转），免费、不消耗 API Key 额度。地址填 ECS 中转后的公网地址，形如 http://你的公网IP:端口 —— 出于安全，界面与日志里只显示脱密形式（如 http://1.2.*.*:18000），完整地址只存在本机设置里。⚠️ 首次开启或换了地址后，要回微信悬浮球点「＋音色管理」重新复刻一次克隆音色（参考音频会存在手机本机）。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSEditTextCell</string>
-			<key>label</key>
-			<string>服务器地址</string>
-			<key>key</key>
-			<string>selfHostURL</string>
-			<key>default</key>
-			<string></string>
-			<key>placeholder</key>
-			<string>http://你的公网IP:端口</string>
-			<key>PostNotification</key>
-			<string>com.yzdmm2024.myvoice/settings</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSEditTextCell</string>
-			<key>label</key>
-			<string>访问令牌（可选）</string>
-			<key>key</key>
-			<string>selfHostToken</string>
-			<key>default</key>
-			<string></string>
-			<key>isPassword</key>
-			<true/>
-			<key>placeholder</key>
-			<string>与服务端 API_TOKEN 一致；没设就留空</string>
-			<key>PostNotification</key>
-			<string>com.yzdmm2024.myvoice/settings</string>
-		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSEditTextCell</string>
@@ -213,9 +173,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>阿里云百炼 DashScope（云端合成用；开了自建服务器可留空）</string>
+			<string>阿里云百炼 DashScope（云端合成用）</string>
 			<key>footerText</key>
-			<string>只有「走阿里云合成」时才需要：到 bailian.console.aliyun.com 开通，右上角地域选【华北2 北京】，底部“API Key”卡片创建（sk- 开头，创建时只显示一次）。Key 只存在本机。若已开启【自建服务器】，克隆音色走你自己的电脑，这一项可以完全不填；但千问预置音色仍需用它。</string>
+			<string>只有「走阿里云合成」时才需要：到 bailian.console.aliyun.com 开通，右上角地域选【华北2 北京】，底部“API Key”卡片创建（sk- 开头，创建时只显示一次）。Key 只存在本机，不会上传。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -255,7 +215,6 @@
 			<key>action</key>
 			<string>testAPIKey</string>
 		</dict>
-
 
 		<dict>
 			<key>cell</key>

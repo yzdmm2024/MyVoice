@@ -186,35 +186,10 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
     NSString *routeModel = MVModelForVoice(voiceID);
     if (!routeModel.length) routeModel = (MVTTSProvider() == 1) ? MVQwenModel() : MVCosyModel();
     BOOL audioFamily = [routeModel hasPrefix:@"qwen-audio-3.0-tts"] || [routeModel hasPrefix:@"cosyvoice"];
-    MVLog(@"[route] voiceID=%@ → model=%@ → %@ 通道%@", voiceID.length ? voiceID : @"(默认)",
-          routeModel, audioFamily ? @"audio/tts(SpeechSynthesizer)" : @"multimodal-generation",
-          (MVSelfHostEnabled() && audioFamily) ? @"（自建服务器）" : @"");
-    // ★ 2.8.35：通道互斥的**最后一道闸**。
-    //   选了「自建·免费」通道时，千问族（qwen3-tts-* / qwen-audio-3.0-tts-*）一律不放行 ——
-    //   否则用户以为在免费跑，实际每句都在扣额度，而且从界面/日志上都看不出来。
-    if (MVChannel() == 0 && !audioFamily) {
-        MVLog(@"[route] ⛔ 自建通道拦截千问族模型 %@（不允许跨通道消耗额度）", routeModel);
-        completion(nil, MVErr(@"当前是「自建服务器（免费）」通道，不会调用千问云端。\n\n"
-                              @"· 想听这个千问音色：设置 → 我的语音 → 发音通道 切到「云端千问」\n"
-                              @"· 想继续免费：在音色列表里选「我的克隆」或 CosyVoice 预置音色"));
-        return;
-    }
-    // ★ 2.8.35：通道互斥的**最后一道闸**。
-    //   选了「自建·免费」通道时，千问族（qwen3-tts-* / qwen-audio-3.0-tts-*）一律不放行 ——
-    //   否则用户以为在免费跑，实际每句都在扣额度，而且从界面/日志上都看不出来。
-    if (MVChannel() == 0 && !audioFamily) {
-        MVLog(@"[route] ⛔ 自建通道拦截千问族模型 %@（不允许跨通道消耗额度）", routeModel);
-        completion(nil, MVErr(@"当前是「自建服务器（免费）」通道，不会调用千问云端。\n\n"
-                              @"· 想听这个千问音色：设置 → 我的语音 → 发音通道 切到「云端千问」\n"
-                              @"· 想继续免费：在音色列表里选「我的克隆」或 CosyVoice 预置音色"));
-        return;
-    }
+    MVLog(@"[route] voiceID=%@ → model=%@ → %@",
+          voiceID.length ? voiceID : @"(默认)",
+          routeModel, audioFamily ? @"audio/tts(SpeechSynthesizer)" : @"multimodal-generation");
     if (audioFamily) {
-        // ★ 2.8.33：自建服务器开启时，CosyVoice 族（克隆 / 预置）全部走本地 server.py，免额度
-        if (MVSelfHostEnabled()) {
-            [self synthesizeSelfHostText:text voiceID:voiceID completion:wrap];
-            return;
-        }
         [self synthesizeCosyText:text voiceID:voiceID completion:wrap];
         return;
     }
@@ -503,147 +478,6 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
 }
 
 
-// ★ 2.8.33：自建服务器合成（本地 CosyVoice / server.py，免费克隆音色）
-//   请求 POST {selfHostURL}/tts，body: {text, voice, speed?, instruction?, ref_audio_b64?, ref_text?}
-//   服务器返回原始 wav 字节（与 DashScope 响应同构），复用 pcmFromWavData 解码成 16k 单声道。
-- (void)synthesizeSelfHostText:(NSString*)text voiceID:(NSString*)voiceID completion:(void(^)(NSData*,NSError*))completion {
-    if (!text.length) { completion(nil, MVErr(@"文字为空")); return; }
-    if (!voiceID.length) { completion(nil, MVErr(@"未选择音色")); return; }
-    NSString *base = MVSelfHostURL();
-    NSString *url = [base stringByAppendingString:@"/tts"];
-
-    NSMutableDictionary *payload = [NSMutableDictionary dictionary];
-    payload[@"text"]  = text;
-    payload[@"voice"] = voiceID;
-    payload[@"speed"] = @(MVCosyRate());
-
-    if ([voiceID hasPrefix:@"myvoice"]) {
-        // 克隆音色：带参考音频（零样本复刻）
-        NSData *ref = MVSelfHostRefAudioForVoice(voiceID);
-        if (ref.length) {
-            payload[@"ref_audio_b64"] = [ref base64EncodedStringWithOptions:0];
-            NSString *rt = MVGetStr([NSString stringWithFormat:@"refText_%@", voiceID]);
-            if (rt.length) payload[@"ref_text"] = rt;
-            MVLog(@"[selfhost] 克隆音色 %@ 带参考音频 %lu 字节", voiceID, (unsigned long)ref.length);
-        } else {
-            MVLog(@"[selfhost] ⚠️ 克隆音色 %@ 缺少本地参考音频（请在该模式下重新复刻一次）", voiceID);
-            completion(nil, MVErr([NSString stringWithFormat:
-                @"自建服务器：克隆音色「%@」缺少本地参考音频。\\n请在建服模式下重新点「＋音色管理」复刻，参考音频会自动存本机。", voiceID]));
-            return;
-        }
-    } else {
-        // 预置 CosyVoice 音色：可带 instruction
-        NSString *inst = MVCosyInstruction();
-        if (inst.length) payload[@"instruction"] = inst;
-    }
-
-    NSError *je = nil;
-    NSData *json = [NSJSONSerialization dataWithJSONObject:payload options:0 error:&je];
-    if (!json) { completion(nil, MVErr(@"请求构造失败")); return; }
-
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
-    req.HTTPMethod = @"POST";
-    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    NSString *tok = MVSelfHostToken();
-    if (tok.length) [req setValue:tok forHTTPHeaderField:@"X-Token"];
-    req.HTTPBody = json;
-    req.timeoutInterval = 120;     // 本地 CPU 推理每句 3~10s，给足余量
-
-    // ★ 2.8.35：日志脱密 —— 公网地址不进日志文件
-    MVLog(@"[selfhost] TTS 请求 %@ voice=%@ len=%lu",
-          MVMaskHost(url), voiceID, (unsigned long)text.length);
-    NSTimeInterval t0 = [[NSDate date] timeIntervalSince1970];
-    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e){
-        if (e) { MVLog(@"[selfhost] 网络错误 %@", e); completion(nil, e); return; }
-        NSInteger code = [(NSHTTPURLResponse*)r statusCode];
-        if (code != 200) {
-            NSString *msg = [[NSString alloc] initWithData:d ?: [NSData data] encoding:NSUTF8StringEncoding];
-            MVLog(@"[selfhost] HTTP %ld %@", (long)code, msg);
-            completion(nil, MVErr([NSString stringWithFormat:
-                @"自建服务器返回 %ld：%@（确认 server.py 已启动 / ECS 中转已通 / 地址正确）",
-                (long)code, msg.length ? msg : @"未知错误"]));
-            return;
-        }
-        MVLog(@"[perf] 自建合成网络 %ldms", (long)(([[NSDate date] timeIntervalSince1970] - t0) * 1000));
-        NSData *pcm = [self pcmFromWavData:d];
-        if (!pcm) { completion(nil, MVErr(@"自建服务器返回的音频解码失败（非 wav？）")); return; }
-        MVLog(@"[selfhost] TTS 解码完成 %lu bytes PCM", (unsigned long)pcm.length);
-        completion(pcm, nil);
-    }] resume];
-}
-
-// ★ 2.8.37：同步自建服务器音色库（GET {selfHostURL}/voicebank）。
-//   把电脑上 server.py 的 voices/<名字> 与模型预置音色拉到手机，存进共享域 selfHostVoices；
-//   面板 voiceList 会合并它们，选中即免上传参考音频直接用（合成发 voice=<id>，服务端自己读 ref.wav）。
-- (void)syncServerVoicesWithCompletion:(void(^)(NSInteger count, NSError* err))completion {
-    if (!completion) return;
-    if (!MVSelfHostEnabled()) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            completion(0, MVErr(@"未开启「自建服务器」通道（设置 → 我的语音 → 发音通道 → 自建·免费）"));
-        });
-        return;
-    }
-    NSString *url = [MVSelfHostURL() stringByAppendingString:@"/voicebank"];
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
-    req.HTTPMethod = @"GET";
-    NSString *tok = MVSelfHostToken();
-    if (tok.length) [req setValue:tok forHTTPHeaderField:@"X-Token"];
-    req.timeoutInterval = 20;
-    MVLog(@"[selfhost] 同步音色库 %@", MVMaskHost(url));
-    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e){
-        if (e) {
-            MVLog(@"[selfhost] 同步网络错误 %@", e);
-            dispatch_async(dispatch_get_main_queue(), ^{ completion(0, e); });
-            return;
-        }
-        NSInteger code = [(NSHTTPURLResponse*)r statusCode];
-        if (code != 200) {
-            NSString *msg = [[NSString alloc] initWithData:d ?: [NSData data] encoding:NSUTF8StringEncoding];
-            MVLog(@"[selfhost] 同步 HTTP %ld %@", (long)code, msg);
-            NSError *err = MVErr([NSString stringWithFormat:
-                @"自建服务器返回 %ld：%@（确认 server.py 已启动 / ECS 中转已通 / 地址正确）",
-                (long)code, msg.length ? msg : @"未知错误"]);
-            dispatch_async(dispatch_get_main_queue(), ^{ completion(0, err); });
-            return;
-        }
-        NSError *je = nil;
-        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:d options:0 error:&je];
-        if (!json || ![json isKindOfClass:[NSDictionary class]]) {
-            dispatch_async(dispatch_get_main_queue(), ^{ completion(0, MVErr(@"音色库数据解析失败（非 JSON？）")); });
-            return;
-        }
-        NSMutableArray *out = [NSMutableArray array];
-        NSArray *presets = [json[@"presets"] isKindOfClass:[NSArray class]] ? json[@"presets"] : @[];
-        for (NSDictionary *p in presets) {
-            NSString *pid = [p[@"id"] isKindOfClass:[NSString class]] ? p[@"id"] : nil;
-            if (!pid.length) continue;
-            [out addObject:@{
-                @"name":     [p[@"label"] isKindOfClass:[NSString class]] ? p[@"label"] : pid,
-                @"voiceID":  pid,
-                @"provider": @0,
-                @"serverVoice": @YES,
-                @"model":    @"cosyvoice-v3.5-plus",
-                @"type":     @"preset"}];
-        }
-        NSArray *clones = [json[@"clones"] isKindOfClass:[NSArray class]] ? json[@"clones"] : @[];
-        for (NSDictionary *c in clones) {
-            NSString *cid = [c[@"id"] isKindOfClass:[NSString class]] ? c[@"id"] : nil;
-            if (!cid.length) continue;
-            [out addObject:@{
-                @"name":     [c[@"label"] isKindOfClass:[NSString class]] ? c[@"label"] : cid,
-                @"voiceID":  cid,
-                @"provider": @0,
-                @"serverVoice": @YES,
-                @"model":    @"cosyvoice-v3.5-plus",
-                @"type":     @"clone",
-                @"has_ref":  c[@"has_ref"] ?: @NO,
-                @"ref_text": [c[@"ref_text"] isKindOfClass:[NSString class]] ? c[@"ref_text"] : @""}];
-        }
-        MVSetServerVoices(out);
-        MVLog(@"[selfhost] 同步到 %lu 个服务器音色", (unsigned long)out.count);
-        dispatch_async(dispatch_get_main_queue(), ^{ completion((NSInteger)out.count, nil); });
-    }] resume];
-}
 
 // ---- RIFF 小工具 ----
 static inline uint16_t MVrd16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
@@ -964,18 +798,6 @@ static inline uint32_t MVrd32(const uint8_t *p) {
 #pragma mark - 声音复刻（克隆）
 
 - (void)cloneVoiceWithName:(NSString*)name referenceAudioPath:(NSString*)path completion:(void(^)(NSString *voiceID, NSString *model, NSError *err))completion {
-    // ★ 2.8.33：自建服务器模式 —— 完全不连 DashScope，参考音频存本机，本地 server.py 零样本复刻
-    if (MVSelfHostEnabled()) {
-        NSData *audio = [NSData dataWithContentsOfFile:path];
-        if (audio.length == 0) { completion(nil, nil, MVErr(@"参考音频读取失败")); return; }
-        NSString *vid = [NSString stringWithFormat:@"myvoice-%@",
-            [[[NSUUID UUID] UUIDString] substringToIndex:8]];
-        MVSelfHostSaveRefAudio(vid, audio);
-        MVLog(@"[clone] 自建模式：参考音频已存本机(%lu 字节)，voiceID=%@",
-              (unsigned long)audio.length, vid);
-        completion(vid, @"cosyvoice-v3.5-plus", nil);
-        return;
-    }
     NSString *apiKey = MVAPIKey();
     if (!apiKey.length) { completion(nil, nil, MVErr(@"未配置 DashScope API Key")); return; }
     NSData *audio = [NSData dataWithContentsOfFile:path];

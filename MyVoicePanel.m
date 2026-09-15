@@ -79,7 +79,6 @@
 @property (nonatomic, strong) UILabel *sectionLabel;
 @property (nonatomic, strong) UITableView *voiceTable;
 @property (nonatomic, strong) UIButton *reloadBtn;
-@property (nonatomic, strong) UIButton *syncBtn;
 @property (nonatomic, strong) UIButton *pickerBackBtn;
 @property (nonatomic, strong) NSArray *allVoices;
 @property (nonatomic, strong) NSArray *filteredVoices;
@@ -185,16 +184,6 @@
         NSMutableDictionary *m = [d mutableCopy];
         m[@"provider"] = @0;
         [out addObject:m];
-    }
-    // ★ 2.8.37：自建服务器音色（电脑上的语音包 / 模型预置）—— 仅自建通道显示
-    if (MVSelfHostEnabled()) {
-        for (NSDictionary *d in MVServerVoices()) {
-            NSMutableDictionary *m = [d mutableCopy];
-            m[@"provider"]   = @0;        // 归到 CosyVoice 通道
-            m[@"serverVoice"] = @YES;     // 标记：不可删、合成不带 ref
-            if (!m[@"model"]) m[@"model"] = @"cosyvoice-v3.5-plus";
-            [out addObject:m];
-        }
     }
     return out;
 }
@@ -496,7 +485,7 @@
     for (NSDictionary *d in self.allVoices) {
         if ([d[@"voiceID"] isEqualToString:vid]) { name = d[@"name"] ?: d[@"voiceID"]; break; }
     }
-    NSString *provider = MVChannelShortName();   // ★ 2.8.35：自建 / CV / 千问
+    NSString *provider = MVChannelShortName();   // CV / 千问
     NSMutableAttributedString *attr = [[NSMutableAttributedString alloc]
         initWithString:[NSString stringWithFormat:@"音色  "] attributes:@{NSFontAttributeName:[UIFont systemFontOfSize:13], NSForegroundColorAttributeName:[UIColor colorWithWhite:0 alpha:0.35]}];
     [attr appendAttributedString:[[NSAttributedString alloc] initWithString:name attributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:14], NSForegroundColorAttributeName:[UIColor colorWithWhite:0 alpha:0.85]}]];
@@ -521,10 +510,9 @@
 
 // 音色列表分节：千问预置一大坨 + 我的克隆搅在一起，36 个平铺根本找不到自己的音色
 - (void)rebuildVoiceSections {
-    NSMutableArray *qwen = [NSMutableArray array], *mine = [NSMutableArray array], *srv = [NSMutableArray array];
+    NSMutableArray *qwen = [NSMutableArray array], *mine = [NSMutableArray array];
     for (NSDictionary *d in self.filteredVoices) {
         if ([d[@"provider"] integerValue] == 1) [qwen addObject:d];
-        else if ([d[@"serverVoice"] boolValue]) [srv addObject:d];
         else [mine addObject:d];
     }
     NSMutableArray *secs = [NSMutableArray array];
@@ -532,8 +520,6 @@
                                       @"items": qwen}];
     if (mine.count) [secs addObject:@{@"title": [NSString stringWithFormat:@"我的克隆 · %lu", (unsigned long)mine.count],
                                       @"items": mine}];
-    if (srv.count) [secs addObject:@{@"title": [NSString stringWithFormat:@"服务器音色 · %lu", (unsigned long)srv.count],
-                                     @"items": srv}];
 
     // ★ 2.8.7：最近使用置顶（最多 5 个，且仍在当前搜索/过滤结果里）
     NSMutableArray *rec = [NSMutableArray array];
@@ -654,8 +640,8 @@
                         return;
                     }
                     MVSetShared(@"currentVoiceID", vid);
-                    // ★ 2.8.35：自建通道保持不动，其余切「云端 CosyVoice」
-                    if (MVChannel() != 0) MVSetShared(@"ttsChannel", @1);
+                    // 阳江话是 CosyVoice 克隆音色 → 固定走「云端 CosyVoice」通道
+                    MVSetShared(@"ttsChannel", @1);
                     MVSetShared(@"cosyModel", MVCosyModel());
                     [MyVoiceCloud clearSynthesisCache];
                     [self updateDialectButtons];
@@ -761,14 +747,6 @@
     [self.pickerBackBtn setTitleColor:[UIColor colorWithWhite:0 alpha:0.5] forState:UIControlStateNormal];
     [self.pickerBackBtn addTarget:self action:@selector(hidePicker) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:self.pickerBackBtn];
-    // ★ 2.8.38：补全「同步」按钮（2.8.37 的 EBUSY 竞态把创建代码吞掉了 → 按钮永不渲染、点了没反应）
-    self.syncBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.syncBtn setTitle:@"同步" forState:UIControlStateNormal];
-    self.syncBtn.frame = CGRectMake(136, 5, 56, 24);
-    self.syncBtn.titleLabel.font = [UIFont systemFontOfSize:12];
-    [self.syncBtn setTitleColor:[UIColor systemBlueColor] forState:UIControlStateNormal];
-    [self.syncBtn addTarget:self action:@selector(onSyncServerVoices) forControlEvents:UIControlEventTouchUpInside];
-    [header addSubview:self.syncBtn];
     [self.pickerView addSubview:header];
 
     CGFloat y = 34;
@@ -1112,39 +1090,7 @@
         : @"已纠偏"];
 }
 - (void)onReloadVoices { [self refreshVoiceState]; [self.voiceTable reloadData]; [[MyVoiceManager shared] toast:@"已刷新"]; }
-// ★ 2.8.37：同步服务器音色（自建通道下可用）
-- (void)onSyncServerVoices {
-    if (!MVSelfHostEnabled()) { [[MyVoiceManager shared] toast:@"请先在设置开启「自建服务器」通道"]; return; }
-    self.syncBtn.enabled = NO;
-    [[MyVoiceCloud shared] syncServerVoicesWithCompletion:^(NSInteger count, NSError *err){
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.syncBtn.enabled = YES;
-            if (err) {
-                [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"同步失败：%@", err.localizedDescription]];
-                return;
-            }
-            [self refreshVoiceState];
-            [self.voiceTable reloadData];
-            // ★ 2.8.38：若当前卡在缺参考音频的克隆音色，同步后自动切到第一个服务器音色
-            if ([self.selectedVoiceID hasPrefix:@"myvoice"] && MVServerVoices().count) {
-                NSDictionary *firstSrv = MVServerVoices().firstObject;
-                NSString *svid = firstSrv[@"voiceID"] ?: @"";
-                if (svid.length) {
-                    self.selectedVoiceID = svid;
-                    MVMarkVoiceUsed(svid);
-                    if (MVChannel() == 2) MVSetShared(@"ttsChannel", @1);
-                    MVSetShared(@"currentVoiceID", svid);
-                    MVSetShared(@"mvBuiltinVoice", @"");
-                    [self.voiceTable reloadData];
-                    [[MyVoiceManager shared] toast:@"已切换到服务器音色（电脑语音包）"];
-                    return;
-                }
-            }
-            [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"已同步 %ld 个服务器音色", (long)count]];
-        });
-    }];
-}
-- (void)showPicker { self.homeView.hidden = YES; self.pickerView.hidden = NO; self.syncBtn.hidden = !MVSelfHostEnabled(); [self refreshVoiceState]; [self layoutPickerRows]; [self.searchBar resignFirstResponder]; }
+- (void)showPicker { self.homeView.hidden = YES; self.pickerView.hidden = NO; [self refreshVoiceState]; [self layoutPickerRows]; [self.searchBar resignFirstResponder]; }
 - (void)hidePicker { self.pickerView.hidden = YES; self.homeView.hidden = NO; [self refreshVoiceState]; }
 
 #pragma mark - 搜索
@@ -1223,7 +1169,7 @@
     self.selectedVoiceID = d[@"voiceID"];
     MVMarkVoiceUsed(d[@"voiceID"] ?: @"");           // ★ 2.8.7：记最近使用
     if ([d[@"provider"] integerValue] == 1) {
-        // ★ 2.8.35：千问族音色必须走「云端千问」通道（自建 / 云端Cosy 通道都会拒绝它）。
+        // ★ 2.8.35：千问族音色必须走「云端千问」通道（CosyVoice 通道会拒绝它）。
         //   这里切换会明确提示 —— 绝不静默扣额度。
         if (MVChannel() != 2) {
             MVSetShared(@"ttsChannel", @2);
@@ -1234,7 +1180,7 @@
         MVSetShared(@"qwenModel", d[@"model"] ?: @"qwen3-tts-flash");
         MVSetShared(@"mvBuiltinVoice", @"");
     } else {
-        // ★ 2.8.35：克隆 / CosyVoice 音色 —— 自建通道保持 0，只有从千问通道过来才切「云端 CosyVoice」
+        // ★ 2.8.35：克隆 / CosyVoice 音色 —— 只有从千问通道过来才切「云端 CosyVoice」
         if (MVChannel() == 2) MVSetShared(@"ttsChannel", @1);
         MVSetShared(@"currentVoiceID", self.selectedVoiceID);
         MVSetShared(@"mvBuiltinVoice", [self.selectedVoiceID isEqualToString:[MyVoiceBuiltin yangjiangVoiceID]] ? @"yangjiang" : @"");
@@ -1249,7 +1195,6 @@
     if (!ip) return;
     NSDictionary *d = [self voiceAt:ip];
     if (!d) return;                                   // ★ 2.8.7：标题行跳过
-    if ([d[@"serverVoice"] boolValue]) { [[MyVoiceManager shared] toast:@"服务器音色不可删（在电脑上增删）"]; return; }
     if ([d[@"provider"] integerValue] == 1) { [[MyVoiceManager shared] toast:@"千问预置不可删"]; return; }
     NSString *vid = d[@"voiceID"] ?: @"";
     NSString *name = d[@"name"] ?: vid;
@@ -1323,7 +1268,7 @@
     NSInteger want = [d[@"provider"] integerValue];       // 1=千问 0=克隆
     // 合成接口是按「当前通道」分流的，试听别的音色时必须临时切过去（结束后恢复）。
     // ★ 2.8.35：切的是 ttsChannel（三档互斥），不再写 ttsProvider。
-    //   点「试听」是显式动作 —— 即便当前是自建通道，试听千问音色也允许（并在结束时还原）。
+    //   点「试听」是显式动作 —— 试听千问音色时允许临时切通道（并在结束时还原）。
     NSInteger oldCh = MVChannel();
     NSInteger wantCh = (want == 1) ? 2 : 1;
     NSString *oldClone = MVGetStr(@"currentVoiceID");
@@ -1561,27 +1506,9 @@
             UIPasteboard.generalPasteboard.string = MVLogFilePath() ?: @"";
             [[MyVoiceManager shared] toast:@"日志路径已复制到剪贴板"];
         }]];
-    // ★ 2.8.34：自建服务器的开关/地址统一到「系统设置 → 我的语音 → 自建服务器」里配置。
-    //   面板这里【绝不能再写】这三个键 —— 面板跑在微信进程里，MVSetShared 会把值写进微信容器，
-    //   而 MVGet 是「容器优先」，会把设置页写在 jbroot 里的值遮住 → 设置页改了不生效。
-    [ac addAction:[UIAlertAction actionWithTitle:
-        [NSString stringWithFormat:@"自建服务器：%@", MVSelfHostEnabled() ? @"已开启" : @"已关闭"]
-        style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ [self showSelfHostInfo]; }]];
     [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     ac.popoverPresentationController.sourceView = self.moreBtn ?: self.homeView;
     ac.popoverPresentationController.sourceRect = self.moreBtn.bounds;
-    [self mvPresent:ac];
-}
-
-// ★ 2.8.34：只读状态 + 指路（配置统一放在 系统设置 → 我的语音 → 自建服务器）
-- (void)showSelfHostInfo {
-    NSString *msg = [NSString stringWithFormat:
-        @"当前通道：%@\n服务器：%@\n\n通道和地址请在【系统设置 → 我的语音 → 发音通道】里改，\n改完直接回聊天页即可生效（不用重启）。\n\n三条通道互斥，同一时刻只走一条：\n① 自建·免费 —— 走你电脑上的 CosyVoice，不耗额度；\n② 云端Cosy — 阿里云 CosyVoice，按量计费；\n③ 云端千问 — 阿里云预置音色，按量计费。\n\n⚠️ 选了「自建·免费」时千问一律不参与，不会偷偷扣额度。\n首次开启或换了地址后，请重新点「＋音色管理」复刻一次克隆音色\n（参考音频存在手机本机，合成时发给你的服务器）。\n\n（地址按脱密显示，完整值只在本机设置里。）",
-        MVChannelName(),
-        MVMaskHost(MVSelfHostURL())];
-    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"自建服务器"
-        message:msg preferredStyle:UIAlertControllerStyleAlert];
-    [ac addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self mvPresent:ac];
 }
 

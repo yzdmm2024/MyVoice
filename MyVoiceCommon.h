@@ -266,19 +266,15 @@ static inline BOOL MVEnabled(void)    { id v = MVGet(@"enabled"); return v ? [v 
 // 引擎模式：0 = 离线(AVSpeech 系统中文，机器人音)；1 = 云端(CosyVoice 克隆 或 千问 Qwen-TTS)
 static inline NSInteger MVEngineMode(void){ id v = MVGet(@"engineMode"); return v ? [v integerValue] : 1; }
 
-// ===== ★ 2.8.35：发音通道 ttsChannel（三选一，天然互斥） =====
-//   0 = 自建服务器        本机/ECS 上的 CosyVoice，完全免费，不碰 DashScope
+// ===== ★ 2.8.41：发音通道 ttsChannel（二选一，天然互斥） =====
 //   1 = 云端 CosyVoice    阿里云百炼，耗额度（克隆 / 设计音色）
 //   2 = 云端千问 Qwen-TTS 阿里云百炼，耗额度（官方预置音色，无需克隆）
 //
-// 为什么把两个开关并成一个通道：
-//   2.8.34 及以前是「selfHostEnabled 开关」+「ttsProvider 二选一」两组**独立**设置，
-//   两者可以同时成立 —— 用户明明开了自建服务器，千问预置音色那条路仍然照走阿里云，
-//   于是"开了免费模式还在扣额度"，而且从界面上根本看不出来钱花在哪。
-//   现在 selfHostEnabled / ttsProvider 全部由 ttsChannel **单向派生**，
-//   数据结构上就不可能出现"既要自建服务器、又要千问"的状态。
+//   历史：0 = 自建服务器（本地 CosyVoice + 阿里云 ECS 中转）2.8.33 引入、2.8.41 整体移除
+//   —— 手机端点一次试听要等近 3 分钟才出声，体验不可接受。
+//   老用户存过 ttsChannel=0 的，这里一律归并到「云端 CosyVoice」，不会卡在无效档位。
 //
-// 自建系的键必须走【jbroot 共享域优先】：面板跑在微信进程里，容器值会遮住设置页写入的值。
+//   selfHostEnabled / ttsProvider 全部由 ttsChannel **单向派生**。
 static inline id MVChannelGet(NSString *key) {
     NSDictionary *sh = MVSharedPrefs();
     if ([sh isKindOfClass:[NSDictionary class]]) {
@@ -289,34 +285,29 @@ static inline id MVChannelGet(NSString *key) {
 }
 static inline NSInteger MVChannel(void) {
     id v = MVChannelGet(@"ttsChannel");
-    if (v) { NSInteger n = [v integerValue]; if (n >= 0 && n <= 2) return n; }
-    // 旧版兼容：没写过 ttsChannel 的老用户，按老的两个键推导一次（结果与旧行为一致）
+    if (v) {
+        NSInteger n = [v integerValue];
+        if (n == 1 || n == 2) return n;
+        return 1;   // ★ 2.8.41：0（已移除的自建通道）归并到云端 CosyVoice
+    }
+    // 旧版兼容：没写过 ttsChannel 的老用户，按老的两个键推导一次
     id sh = MVChannelGet(@"selfHostEnabled");
-    if (sh && [sh boolValue]) return 0;
+    if (sh && [sh boolValue]) return 1;   // ★ 2.8.41：原自建用户归并到云端 CosyVoice
     id tp = MVChannelGet(@"ttsProvider");
     if (tp && [tp integerValue] == 0) return 1;
     return 2;
 }
-// 云端 TTS 服务商：0 = CosyVoice 族（含自建服务器）；1 = 千问 Qwen-TTS
-// ★ 只有 ttsChannel==2 才是千问 —— 自建服务器通道下**永远**返回 0，千问不可能被接走。
+// 云端 TTS 服务商：0 = CosyVoice 族；1 = 千问 Qwen-TTS
 static inline NSInteger MVTTSProvider(void){ return (MVChannel() == 2) ? 1 : 0; }
 
 // 通道名（界面文案）
 static inline NSString* MVChannelName(void) {
-    switch (MVChannel()) {
-        case 0:  return @"自建服务器（免费·不耗额度）";
-        case 1:  return @"云端 CosyVoice（耗额度）";
-        default: return @"云端千问 TTS（耗额度）";
-    }
+    return (MVChannel() == 1) ? @"云端 CosyVoice（耗额度）" : @"云端千问 TTS（耗额度）";
 }
 static inline NSString* MVChannelShortName(void) {
-    switch (MVChannel()) {
-        case 0:  return @"自建";
-        case 1:  return @"CV";
-        default: return @"千问";
-    }
+    return (MVChannel() == 1) ? @"CV" : @"千问";
 }
-static inline BOOL MVChannelIsPaid(void) { return MVChannel() != 0; }
+static inline BOOL MVChannelIsPaid(void) { return YES; }
 
 // ===== ★ 2.8.35：地址脱密 =====
 // 服务器地址（公网 IP + 端口）属隐私信息，直接印在说明文字/日志里等于公开暴露，
@@ -1072,8 +1063,8 @@ static inline void MVApplyVoicePreset(NSDictionary *p) {
     if (![p isKindOfClass:[NSDictionary class]]) return;
     NSInteger prov = [p[@"provider"] integerValue];
     // ★ 2.8.35：预设里的 provider 映射到三通道（ttsProvider 已不再直接生效）
-    //   provider=1（千问）→ 通道2；provider=0（克隆）→ 当前是自建通道就保持 0，否则通道1
-    MVSetShared(@"ttsChannel", @(prov == 1 ? 2 : (MVChannel() == 0 ? 0 : 1)));
+    //   provider=1（千问）→ 通道2；provider=0（克隆）→ 通道1
+    MVSetShared(@"ttsChannel", @(prov == 1 ? 2 : 1));
     if (prov == 1) {
         if ([p[@"qwenVoice"] length]) MVSetShared(@"qwenVoice", p[@"qwenVoice"]);
         if ([p[@"qwenModel"] length]) MVSetShared(@"qwenModel", p[@"qwenModel"]);
@@ -1439,121 +1430,3 @@ static inline NSInteger MVVoiceProvider(NSString *vid) {
 }
 
 
-// ===== ★ 2.8.33 新增 / ★ 2.8.34 调整：自建服务器（本地 CosyVoice + ECS 中转，免费克隆音色）=====
-//   开关/地址/令牌：开启后，CosyVoice 族（克隆 / 设计 / 预置）全部走本地 server.py，
-//   不再消耗 DashScope 额度；千问预置音色仍走阿里云。
-//
-//   ★ 2.8.34 关键：这三个键【只由「系统设置 → 我的语音」写入】（落 jbroot 共享域）。
-//   为什么不能沿用 MVGet 的默认顺序：MVGet 是【容器 suite 优先】（见上文 2.4.3 的说明），
-//   而 Settings 进程写不到微信容器 —— 设置页改的值会被容器里的旧值遮住，表现为
-//   「设置页改了不生效」。历史上 ttsProvider / qwenVoice 就是这么被坑的。
-//   所以自建键单独走【jbroot 共享域优先】，顺带自愈 2.8.33 残留在容器里的旧值。
-//   ⚠️ 前提：面板（微信进程内）【不能再写这三个键】，否则又会被容器遮住。
-//      → 面板已改为只读状态提示（见 MyVoicePanel 的 showSelfHostInfo）。
-static inline id MVSelfHostGet(NSString *key) {
-    NSDictionary *sh = MVSharedPrefs();
-    if ([sh isKindOfClass:[NSDictionary class]]) {
-        id v = sh[key];
-        if (v) return v;
-    }
-    return MVGet(key);
-}
-// ★ 2.8.35：自建服务器不再是独立开关，而是 ttsChannel==0 的派生结果。
-//   与「云端千问」天然互斥：选了千问通道，这里必然是 NO；选了自建通道，千问一定不参与。
-static inline BOOL MVSelfHostEnabled(void) { return MVChannel() == 0; }
-static inline NSString* MVSelfHostURL(void) {
-    id raw = MVSelfHostGet(@"selfHostURL");
-    NSString *v = [raw isKindOfClass:[NSString class]] ? raw : (raw ? [raw description] : @"");
-    if (!v.length) return @"http://127.0.0.1:8000";   // 默认本机调试（手机与服务器同网 / 隧道）
-    // ★ 2.8.39：清洗用户误输入的非法字符（全角冒号/点、首尾空格、零宽字符）。
-    //   从聊天复制地址常带全角冒号「：」或前后空格，使 NSURL 解析失败报「不支持的URL」。
-    NSMutableString *mv = [NSMutableString stringWithString:v];
-    [mv replaceOccurrencesOfString:@"：" withString:@":" options:0 range:NSMakeRange(0, mv.length)];
-    [mv replaceOccurrencesOfString:@"．" withString:@"." options:0 range:NSMakeRange(0, mv.length)];
-    [mv replaceOccurrencesOfString:@" " withString:@"" options:0 range:NSMakeRange(0, mv.length)];
-    [mv replaceOccurrencesOfString:@"\t" withString:@"" options:0 range:NSMakeRange(0, mv.length)];
-    [mv replaceOccurrencesOfString:@"\u200b" withString:@"" options:0 range:NSMakeRange(0, mv.length)];
-    [mv replaceOccurrencesOfString:@"\ufeff" withString:@"" options:0 range:NSMakeRange(0, mv.length)];
-    v = [mv stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    // ★ 2.8.36：用户常只填 ip:port（如 101.200.189.251:18000）漏掉 http://，
-    //   导致 NSURL 解析失败、合成报「不支持的URL」。这里统一兜底补 scheme。
-    if (![v hasPrefix:@"http://"] && ![v hasPrefix:@"https://"])
-        v = [@"http://" stringByAppendingString:v];
-    if ([v hasSuffix:@"/"]) v = [v substringToIndex:v.length - 1];
-    return v;
-}
-static inline NSString* MVSelfHostToken(void) {
-    id raw = MVSelfHostGet(@"selfHostToken");
-    return [raw isKindOfClass:[NSString class]] ? raw : (raw ? [raw description] : @"");
-}
-
-// ★ 2.8.37：自建服务器「同步服务器音色」—— 把电脑上 server.py 的 voices/ 语音包与模型预置音色
-//   拉到手机列表里。只存元数据（id/label），参考音频永远留在服务器；
-//   合成时发 voice=<id>，服务端自己读 voices/<id>/ref.wav。
-// ★ 2.8.40：读端对齐 MVVoices() —— 全局域 → jbroot 共享 plist → 本 App 容器，三路合并按 voiceID 去重。
-//   旧版只读 MVSharedPrefs()（jbroot plist 文件）：而 MVSetShared 写 jbroot 常被微信沙箱拒绝，
-//   值其实只落进了容器 —— 于是「同步成功、音色也存了，列表却永远空」。这是同步没反应的根因。
-static inline NSArray* MVServerVoices(void) {
-    NSMutableArray *out = [NSMutableArray array];
-    // ① 全局域（kCFPreferencesAnyUser）—— 跨 App 最稳的通道
-    CFPropertyListRef gv = CFPreferencesCopyValue((__bridge CFStringRef)@"selfHostVoices",
-        (__bridge CFStringRef)MV_PREFS_ID, kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
-    if (gv) {
-        NSArray *a = CFBridgingRelease(gv);
-        if ([a isKindOfClass:[NSArray class]]) [out addObjectsFromArray:a];
-    }
-    // ② jbroot 共享 plist
-    NSDictionary *sh = MVSharedPrefs();
-    id sv = [sh isKindOfClass:[NSDictionary class]] ? sh[@"selfHostVoices"] : nil;
-    if ([sv isKindOfClass:[NSArray class]]) {
-        for (NSDictionary *d in (NSArray*)sv) {
-            BOOL dup = NO;
-            for (NSDictionary *e in out) if ([e[@"voiceID"] isEqualToString:d[@"voiceID"]]) { dup = YES; break; }
-            if (!dup) [out addObject:d];
-        }
-    }
-    // ③ 本 App 容器（同步时刚写入的副本）
-    id cv = [MVPrefs() objectForKey:@"selfHostVoices"];
-    if ([cv isKindOfClass:[NSArray class]]) {
-        for (NSDictionary *d in (NSArray*)cv) {
-            BOOL dup = NO;
-            for (NSDictionary *e in out) if ([e[@"voiceID"] isEqualToString:d[@"voiceID"]]) { dup = YES; break; }
-            if (!dup) [out addObject:d];
-        }
-    }
-    return out.count ? out : @[];
-}
-static inline void MVSetServerVoices(NSArray *a) {
-    if (!a) a = @[];
-    MVSetShared(@"selfHostVoices", a);
-    // ★ 2.8.40：额外写一份到 CFPreferences 全局域（同 MVSetSharedVoiceList 的做法），
-    //   保证读端任一条通道都拿得到；写容器/jbroot 失败也不影响列表显示。
-    CFPreferencesSetValue((__bridge CFStringRef)@"selfHostVoices",
-                          (__bridge CFPropertyListRef)a,
-                          (__bridge CFStringRef)MV_PREFS_ID,
-                          kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
-    CFPreferencesSynchronize((__bridge CFStringRef)MV_PREFS_ID,
-                             kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
-}
-
-// ★ 克隆音色复刻时把参考音频存到本机沙盒；合成时作为 ref_audio_b64 发给 server.py 做零样本复刻。
-static inline NSString* MVSelfHostRefAudioDir(void) {
-    return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/myvoice_selfhost_refs"];
-}
-static inline NSString* MVSelfHostRefAudioPath(NSString *voiceID) {
-    if (!voiceID.length) return nil;
-    return [MVSelfHostRefAudioDir() stringByAppendingPathComponent:
-            [NSString stringWithFormat:@"%@.wav", voiceID]];
-}
-static inline NSData* MVSelfHostRefAudioForVoice(NSString *voiceID) {
-    NSString *p = MVSelfHostRefAudioPath(voiceID);
-    if (!p) return nil;
-    return [NSData dataWithContentsOfFile:p];
-}
-static inline void MVSelfHostSaveRefAudio(NSString *voiceID, NSData *audio) {
-    if (!voiceID.length || !audio.length) return;
-    NSFileManager *fm = [NSFileManager defaultManager];
-    [fm createDirectoryAtPath:MVSelfHostRefAudioDir()
-      withIntermediateDirectories:YES attributes:nil error:nil];
-    [audio writeToFile:MVSelfHostRefAudioPath(voiceID) atomically:NO];
-}
