@@ -613,7 +613,7 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
             return;
         }
         NSMutableArray *out = [NSMutableArray array];
-        NSArray *presets = [json[@"presets"] isKindOfClass:[NSArray class]] ? json[@"presets"] : @[]];
+        NSArray *presets = [json[@"presets"] isKindOfClass:[NSArray class]] ? json[@"presets"] : @[];
         for (NSDictionary *p in presets) {
             NSString *pid = [p[@"id"] isKindOfClass:[NSString class]] ? p[@"id"] : nil;
             if (!pid.length) continue;
