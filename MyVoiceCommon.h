@@ -1352,3 +1352,41 @@ static inline NSInteger MVVoiceProvider(NSString *vid) {
         if ([d[@"voiceID"] isEqualToString:vid]) return ([d[@"provider"] integerValue] == 1) ? 1 : 0;
     return MVTTSProvider();
 }
+
+
+// ===== ★ 2.8.33：自建服务器（本地 CosyVoice + 阿里云 ECS 中转，免费克隆音色）=====
+//   开关/地址/令牌：开启后，CosyVoice 族（克隆 / 设计 / 预置）全部走本地 server.py，
+//   不再消耗 DashScope 额度；千问预置音色仍走阿里云。
+static inline BOOL MVSelfHostEnabled(void) {
+    id v = MVGet(@"selfHostEnabled");
+    return v ? [v boolValue] : NO;
+}
+static inline NSString* MVSelfHostURL(void) {
+    NSString *v = MVGetStr(@"selfHostURL");
+    if (!v.length) return @"http://127.0.0.1:8000";   // 默认本机调试（手机与服务器同网 / 隧道）
+    if ([v hasSuffix:@"/"]) v = [v substringToIndex:v.length - 1];
+    return v;
+}
+static inline NSString* MVSelfHostToken(void) { return MVGetStr(@"selfHostToken"); }
+
+// ★ 克隆音色复刻时把参考音频存到本机沙盒；合成时作为 ref_audio_b64 发给 server.py 做零样本复刻。
+static inline NSString* MVSelfHostRefAudioDir(void) {
+    return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/myvoice_selfhost_refs"];
+}
+static inline NSString* MVSelfHostRefAudioPath(NSString *voiceID) {
+    if (!voiceID.length) return nil;
+    return [MVSelfHostRefAudioDir() stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"%@.wav", voiceID]];
+}
+static inline NSData* MVSelfHostRefAudioForVoice(NSString *voiceID) {
+    NSString *p = MVSelfHostRefAudioPath(voiceID);
+    if (!p) return nil;
+    return [NSData dataWithContentsOfFile:p];
+}
+static inline void MVSelfHostSaveRefAudio(NSString *voiceID, NSData *audio) {
+    if (!voiceID.length || !audio.length) return;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm createDirectoryAtPath:MVSelfHostRefAudioDir()
+      withIntermediateDirectories:YES attributes:nil error:nil];
+    [audio writeToFile:MVSelfHostRefAudioPath(voiceID) atomically:NO];
+}

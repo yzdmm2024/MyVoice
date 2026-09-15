@@ -1494,9 +1494,46 @@
             UIPasteboard.generalPasteboard.string = MVLogFilePath() ?: @"";
             [[MyVoiceManager shared] toast:@"日志路径已复制到剪贴板"];
         }]];
+    [ac addAction:[UIAlertAction actionWithTitle:
+        [NSString stringWithFormat:@"自建服务器：%@", MVSelfHostEnabled() ? @"已开启" : @"已关闭"]
+        style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
+            MVSetShared(@"selfHostEnabled", @(!MVSelfHostEnabled()));
+            [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"自建服务器已%@",
+                MVSelfHostEnabled() ? @"开启（CosyVoice 族走本地服务器，免额度）" : @"关闭"]];
+            [self refreshVoiceState];
+        }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"配置自建服务器" style:UIAlertActionStyleDefault
+        handler:^(UIAlertAction *a){ [self showSelfHostConfig]; }]];
     [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     ac.popoverPresentationController.sourceView = self.moreBtn ?: self.homeView;
     ac.popoverPresentationController.sourceRect = self.moreBtn.bounds;
+    [self mvPresent:ac];
+}
+
+- (void)showSelfHostConfig {
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"自建服务器地址"
+        message:@"填 ECS 中转后的公网地址（server.py 监听 127.0.0.1:8000，由 ECS frp 中转暴露）。\n例：http://你的ECS公网IP:端口" preferredStyle:UIAlertControllerStyleAlert];
+    [ac addTextFieldWithConfigurationHandler:^(UITextField *t){
+        t.placeholder = @"http://127.0.0.1:8000";
+        t.text = MVSelfHostURL();
+        t.keyboardType = UIKeyboardTypeURL;
+    }];
+    [ac addTextFieldWithConfigurationHandler:^(UITextField *t){
+        t.placeholder = @"访问令牌（可选，与 server.py 的 API_TOKEN 对应）";
+        t.text = MVSelfHostToken();
+        t.secureTextEntry = YES;
+    }];
+    [ac addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault
+        handler:^(UIAlertAction *a){
+            NSString *u = [ac.textFields[0].text stringByTrimmingCharactersInSet:
+                [NSCharacterSet whitespaceAndNewlineCharacterSet]] ?: @"";
+            MVSetShared(@"selfHostURL", u);
+            NSString *tk = [ac.textFields[1].text stringByTrimmingCharactersInSet:
+                [NSCharacterSet whitespaceAndNewlineCharacterSet]] ?: @"";
+            MVSetShared(@"selfHostToken", tk);
+            [[MyVoiceManager shared] toast:@"自建服务器地址已保存"];
+        }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     [self mvPresent:ac];
 }
 

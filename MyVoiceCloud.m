@@ -186,9 +186,15 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
     NSString *routeModel = MVModelForVoice(voiceID);
     if (!routeModel.length) routeModel = (MVTTSProvider() == 1) ? MVQwenModel() : MVCosyModel();
     BOOL audioFamily = [routeModel hasPrefix:@"qwen-audio-3.0-tts"] || [routeModel hasPrefix:@"cosyvoice"];
-    MVLog(@"[route] voiceID=%@ → model=%@ → %@ 通道", voiceID.length ? voiceID : @"(默认)",
-          routeModel, audioFamily ? @"audio/tts(SpeechSynthesizer)" : @"multimodal-generation");
+    MVLog(@"[route] voiceID=%@ → model=%@ → %@ 通道%@", voiceID.length ? voiceID : @"(默认)",
+          routeModel, audioFamily ? @"audio/tts(SpeechSynthesizer)" : @"multimodal-generation",
+          (MVSelfHostEnabled() && audioFamily) ? @"（自建服务器）" : @"");
     if (audioFamily) {
+        // ★ 2.8.33：自建服务器开启时，CosyVoice 族（克隆 / 预置）全部走本地 server.py，免额度
+        if (MVSelfHostEnabled()) {
+            [self synthesizeSelfHostText:text voiceID:voiceID completion:wrap];
+            return;
+        }
         [self synthesizeCosyText:text voiceID:voiceID completion:wrap];
         return;
     }
@@ -473,6 +479,74 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
             MVLog(@"[cloud] TTS 解码完成 %lu bytes PCM", (unsigned long)pcm.length);
             completion(pcm, nil);
         }] resume];
+    }] resume];
+}
+
+
+// ★ 2.8.33：自建服务器合成（本地 CosyVoice / server.py，免费克隆音色）
+//   请求 POST {selfHostURL}/tts，body: {text, voice, speed?, instruction?, ref_audio_b64?, ref_text?}
+//   服务器返回原始 wav 字节（与 DashScope 响应同构），复用 pcmFromWavData 解码成 16k 单声道。
+- (void)synthesizeSelfHostText:(NSString*)text voiceID:(NSString*)voiceID completion:(void(^)(NSData*,NSError*))completion {
+    if (!text.length) { completion(nil, MVErr(@"文字为空")); return; }
+    if (!voiceID.length) { completion(nil, MVErr(@"未选择音色")); return; }
+    NSString *base = MVSelfHostURL();
+    NSString *url = [base stringByAppendingString:@"/tts"];
+
+    NSMutableDictionary *payload = [NSMutableDictionary dictionary];
+    payload[@"text"]  = text;
+    payload[@"voice"] = voiceID;
+    payload[@"speed"] = @(MVCosyRate());
+
+    if ([voiceID hasPrefix:@"myvoice"]) {
+        // 克隆音色：带参考音频（零样本复刻）
+        NSData *ref = MVSelfHostRefAudioForVoice(voiceID);
+        if (ref.length) {
+            payload[@"ref_audio_b64"] = [ref base64EncodedStringWithOptions:0];
+            NSString *rt = MVGetStr([NSString stringWithFormat:@"refText_%@", voiceID]);
+            if (rt.length) payload[@"ref_text"] = rt;
+            MVLog(@"[selfhost] 克隆音色 %@ 带参考音频 %lu 字节", voiceID, (unsigned long)ref.length);
+        } else {
+            MVLog(@"[selfhost] ⚠️ 克隆音色 %@ 缺少本地参考音频（请在该模式下重新复刻一次）", voiceID);
+            completion(nil, MVErr([NSString stringWithFormat:
+                @"自建服务器：克隆音色「%@」缺少本地参考音频。\\n请在建服模式下重新点「＋音色管理」复刻，参考音频会自动存本机。", voiceID]));
+            return;
+        }
+    } else {
+        // 预置 CosyVoice 音色：可带 instruction
+        NSString *inst = MVCosyInstruction();
+        if (inst.length) payload[@"instruction"] = inst;
+    }
+
+    NSError *je = nil;
+    NSData *json = [NSJSONSerialization dataWithJSONObject:payload options:0 error:&je];
+    if (!json) { completion(nil, MVErr(@"请求构造失败")); return; }
+
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
+    req.HTTPMethod = @"POST";
+    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    NSString *tok = MVSelfHostToken();
+    if (tok.length) [req setValue:tok forHTTPHeaderField:@"X-Token"];
+    req.HTTPBody = json;
+    req.timeoutInterval = 120;     // 本地 CPU 推理每句 3~10s，给足余量
+
+    MVLog(@"[selfhost] TTS 请求 %@ voice=%@ len=%lu", url, voiceID, (unsigned long)text.length);
+    NSTimeInterval t0 = [[NSDate date] timeIntervalSince1970];
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e){
+        if (e) { MVLog(@"[selfhost] 网络错误 %@", e); completion(nil, e); return; }
+        NSInteger code = [(NSHTTPURLResponse*)r statusCode];
+        if (code != 200) {
+            NSString *msg = [[NSString alloc] initWithData:d ?: [NSData data] encoding:NSUTF8StringEncoding];
+            MVLog(@"[selfhost] HTTP %ld %@", (long)code, msg);
+            completion(nil, MVErr([NSString stringWithFormat:
+                @"自建服务器返回 %ld：%@（确认 server.py 已启动 / ECS 中转已通 / 地址正确）",
+                (long)code, msg.length ? msg : @"未知错误"]));
+            return;
+        }
+        MVLog(@"[perf] 自建合成网络 %ldms", (long)(([[NSDate date] timeIntervalSince1970] - t0) * 1000));
+        NSData *pcm = [self pcmFromWavData:d];
+        if (!pcm) { completion(nil, MVErr(@"自建服务器返回的音频解码失败（非 wav？）")); return; }
+        MVLog(@"[selfhost] TTS 解码完成 %lu bytes PCM", (unsigned long)pcm.length);
+        completion(pcm, nil);
     }] resume];
 }
 
@@ -795,6 +869,18 @@ static inline uint32_t MVrd32(const uint8_t *p) {
 #pragma mark - 声音复刻（克隆）
 
 - (void)cloneVoiceWithName:(NSString*)name referenceAudioPath:(NSString*)path completion:(void(^)(NSString *voiceID, NSString *model, NSError *err))completion {
+    // ★ 2.8.33：自建服务器模式 —— 完全不连 DashScope，参考音频存本机，本地 server.py 零样本复刻
+    if (MVSelfHostEnabled()) {
+        NSData *audio = [NSData dataWithContentsOfFile:path];
+        if (audio.length == 0) { completion(nil, nil, MVErr(@"参考音频读取失败")); return; }
+        NSString *vid = [NSString stringWithFormat:@"myvoice-%@",
+            [[[NSUUID UUID] UUIDString] substringToIndex:8]];
+        MVSelfHostSaveRefAudio(vid, audio);
+        MVLog(@"[clone] 自建模式：参考音频已存本机(%lu 字节)，voiceID=%@",
+              (unsigned long)audio.length, vid);
+        completion(vid, @"cosyvoice-v3.5-plus", nil);
+        return;
+    }
     NSString *apiKey = MVAPIKey();
     if (!apiKey.length) { completion(nil, nil, MVErr(@"未配置 DashScope API Key")); return; }
     NSData *audio = [NSData dataWithContentsOfFile:path];
