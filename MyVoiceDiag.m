@@ -8,15 +8,47 @@
 // ============================================================
 
 BOOL mvDiagIsQQ(void) {
-    NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
-    return [bid rangeOfString:@"tencent.mqq"].location != NSNotFound;
+    // ★ 2.8.35：进程身份在进程生命周期内不会变 —— 缓存起来。
+    //   原来每次调用都读一次 bundleIdentifier，而它被 sendEvent: 这类热路径用到。
+    static BOOL isQQ = NO;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
+        isQQ = ([bid rangeOfString:@"tencent.mqq"].location != NSNotFound);
+    });
+    return isQQ;
 }
 
 // ★ 2.8.24：抖音（Aweme）进程判断。bundle id = com.ss.iphone.ugc.Aweme。
 BOOL mvDiagIsDouyin(void) {
-    NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
-    return [bid rangeOfString:@"aweme" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-           [bid rangeOfString:@"ugc.iphone" options:NSCaseInsensitiveSearch].location != NSNotFound;
+    // ★ 2.8.35：同上，进程身份只算一次。
+    static BOOL isDY = NO;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
+        isDY = ([bid rangeOfString:@"aweme" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                [bid rangeOfString:@"ugc.iphone" options:NSCaseInsensitiveSearch].location != NSNotFound);
+    });
+    return isDY;
+}
+
+// ★ 2.8.35：触摸诊断总开关。默认关闭。
+//   为什么要这个开关：sendEvent: 里那段 2.8.17 加的抓包代码，会在 QQ 里对
+//   **每一次触摸**逐级 superview（最多 5 层）做 NSStringFromClass + 11 次
+//   containsString；一旦命中（类名含 Btn/Button/Bar/Input/Tool/Voice/Record/Ptt
+//   —— 这些在 QQ 里遍地都是），还会拼一长串层级/手势/UIControl 信息并写日志。
+//   而 MVLog 每条都是 NSLog + 开/seek/写/关文件 —— 等于每点一下就写盘。
+//   结果：没打开悬浮面板也在耗电、还拖慢事件分发。默认关掉，排查时再开。
+BOOL mvDiagTapLogEnabled(void) {
+    static BOOL enabled = NO;
+    static CFAbsoluteTime last = 0;
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - last > 5.0) {          // 5 秒缓存：设置里改了最多 5 秒生效，避免每帧读盘
+        last = now;
+        id v = MVGet(@"diagTapLog");
+        enabled = v ? [v boolValue] : NO;
+    }
+    return enabled;
 }
 
 // 枚举 QQ 里所有"看着像录音/语音/按住说话"的类，并打印最相关类的方法签名

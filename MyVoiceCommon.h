@@ -266,10 +266,93 @@ static inline BOOL MVEnabled(void)    { id v = MVGet(@"enabled"); return v ? [v 
 // 引擎模式：0 = 离线(AVSpeech 系统中文，机器人音)；1 = 云端(CosyVoice 克隆 或 千问 Qwen-TTS)
 static inline NSInteger MVEngineMode(void){ id v = MVGet(@"engineMode"); return v ? [v integerValue] : 1; }
 
-// 云端 TTS 服务商：0 = CosyVoice（克隆/设计音色）；1 = 千问 Qwen-TTS（官方预置音色，无需克隆）
-// 注意：同一个 DashScope API Key 两边通用，切换时不用换 Key。
-// 2.2.1 起默认改为千问，避免新用户没克隆音色时直接合成失败。
-static inline NSInteger MVTTSProvider(void){ id v = MVGet(@"ttsProvider"); return v ? [v integerValue] : 1; }
+// ===== ★ 2.8.35：发音通道 ttsChannel（三选一，天然互斥） =====
+//   0 = 自建服务器        本机/ECS 上的 CosyVoice，完全免费，不碰 DashScope
+//   1 = 云端 CosyVoice    阿里云百炼，耗额度（克隆 / 设计音色）
+//   2 = 云端千问 Qwen-TTS 阿里云百炼，耗额度（官方预置音色，无需克隆）
+//
+// 为什么把两个开关并成一个通道：
+//   2.8.34 及以前是「selfHostEnabled 开关」+「ttsProvider 二选一」两组**独立**设置，
+//   两者可以同时成立 —— 用户明明开了自建服务器，千问预置音色那条路仍然照走阿里云，
+//   于是"开了免费模式还在扣额度"，而且从界面上根本看不出来钱花在哪。
+//   现在 selfHostEnabled / ttsProvider 全部由 ttsChannel **单向派生**，
+//   数据结构上就不可能出现"既要自建服务器、又要千问"的状态。
+//
+// 自建系的键必须走【jbroot 共享域优先】：面板跑在微信进程里，容器值会遮住设置页写入的值。
+static inline id MVChannelGet(NSString *key) {
+    NSDictionary *sh = MVSharedPrefs();
+    if ([sh isKindOfClass:[NSDictionary class]]) {
+        id v = sh[key];
+        if (v) return v;
+    }
+    return MVGet(key);
+}
+static inline NSInteger MVChannel(void) {
+    id v = MVChannelGet(@"ttsChannel");
+    if (v) { NSInteger n = [v integerValue]; if (n >= 0 && n <= 2) return n; }
+    // 旧版兼容：没写过 ttsChannel 的老用户，按老的两个键推导一次（结果与旧行为一致）
+    id sh = MVChannelGet(@"selfHostEnabled");
+    if (sh && [sh boolValue]) return 0;
+    id tp = MVChannelGet(@"ttsProvider");
+    if (tp && [tp integerValue] == 0) return 1;
+    return 2;
+}
+// 云端 TTS 服务商：0 = CosyVoice 族（含自建服务器）；1 = 千问 Qwen-TTS
+// ★ 只有 ttsChannel==2 才是千问 —— 自建服务器通道下**永远**返回 0，千问不可能被接走。
+static inline NSInteger MVTTSProvider(void){ return (MVChannel() == 2) ? 1 : 0; }
+
+// 通道名（界面文案）
+static inline NSString* MVChannelName(void) {
+    switch (MVChannel()) {
+        case 0:  return @"自建服务器（免费·不耗额度）";
+        case 1:  return @"云端 CosyVoice（耗额度）";
+        default: return @"云端千问 TTS（耗额度）";
+    }
+}
+static inline NSString* MVChannelShortName(void) {
+    switch (MVChannel()) {
+        case 0:  return @"自建";
+        case 1:  return @"CV";
+        default: return @"千问";
+    }
+}
+static inline BOOL MVChannelIsPaid(void) { return MVChannel() != 0; }
+
+// ===== ★ 2.8.35：地址脱密 =====
+// 服务器地址（公网 IP + 端口）属隐私信息，直接印在说明文字/日志里等于公开暴露，
+// 凡是"显示给用户看 / 落日志"的地方一律先过这里：例 a.b.c.d → a.b.*.*
+// 本机回环与内网（127.0.0.1 / localhost / 192.168.*）不遮，方便本地调试。
+static inline NSString* MVMaskHost(NSString *urlOrHost) {
+    NSString *s = urlOrHost ?: @"";
+    if (!s.length) return @"(未填写)";
+    NSRange sch = [s rangeOfString:@"://"];
+    NSString *head = @"", *rest = s;
+    if (sch.location != NSNotFound) {
+        head = [s substringToIndex:sch.location + 3];
+        rest = [s substringFromIndex:sch.location + 3];
+    }
+    NSRange slash = [rest rangeOfString:@"/"];
+    NSString *hostport = (slash.location == NSNotFound) ? rest : [rest substringToIndex:slash.location];
+    NSString *tail = (slash.location == NSNotFound) ? @"" : [rest substringFromIndex:slash.location];
+    if ([hostport hasPrefix:@"127.0.0.1"] || [hostport hasPrefix:@"localhost"] ||
+        [hostport hasPrefix:@"192.168."] || [hostport hasPrefix:@"10."]) return s;
+    NSArray *parts = [hostport componentsSeparatedByString:@":"];
+    NSString *host = parts.count ? parts[0] : hostport;
+    NSArray *oct = [host componentsSeparatedByString:@"."];
+    NSString *masked = host;
+    if (oct.count == 4 && [oct[3] length]) {
+        masked = [NSString stringWithFormat:@"%@.%@.*.*", oct[0], oct[1]];
+    } else if (host.length > 4) {
+        masked = [NSString stringWithFormat:@"%@****%@",
+                  [host substringToIndex:1],
+                  [host substringFromIndex:host.length - 3]];
+    }
+    NSMutableString *out = [NSMutableString stringWithString:head];
+    [out appendString:masked];
+    if (parts.count > 1 && [parts[1] length]) [out appendFormat:@":%@", parts[1]];
+    [out appendString:tail];
+    return out;
+}
 
 // 千问 Qwen-TTS 模型名（qwen3-tts-flash 支持全部 48 个预置音色；老 qwen-tts 只支持前 4 个）
 static inline NSString* MVQwenModel(void) {
@@ -988,7 +1071,9 @@ static inline NSDictionary* MVCaptureVoicePreset(NSString *name) {
 static inline void MVApplyVoicePreset(NSDictionary *p) {
     if (![p isKindOfClass:[NSDictionary class]]) return;
     NSInteger prov = [p[@"provider"] integerValue];
-    MVSetShared(@"ttsProvider", @(prov));
+    // ★ 2.8.35：预设里的 provider 映射到三通道（ttsProvider 已不再直接生效）
+    //   provider=1（千问）→ 通道2；provider=0（克隆）→ 当前是自建通道就保持 0，否则通道1
+    MVSetShared(@"ttsChannel", @(prov == 1 ? 2 : (MVChannel() == 0 ? 0 : 1)));
     if (prov == 1) {
         if ([p[@"qwenVoice"] length]) MVSetShared(@"qwenVoice", p[@"qwenVoice"]);
         if ([p[@"qwenModel"] length]) MVSetShared(@"qwenModel", p[@"qwenModel"]);
@@ -1373,10 +1458,9 @@ static inline id MVSelfHostGet(NSString *key) {
     }
     return MVGet(key);
 }
-static inline BOOL MVSelfHostEnabled(void) {
-    id v = MVSelfHostGet(@"selfHostEnabled");
-    return v ? [v boolValue] : NO;
-}
+// ★ 2.8.35：自建服务器不再是独立开关，而是 ttsChannel==0 的派生结果。
+//   与「云端千问」天然互斥：选了千问通道，这里必然是 NO；选了自建通道，千问一定不参与。
+static inline BOOL MVSelfHostEnabled(void) { return MVChannel() == 0; }
 static inline NSString* MVSelfHostURL(void) {
     id raw = MVSelfHostGet(@"selfHostURL");
     NSString *v = [raw isKindOfClass:[NSString class]] ? raw : (raw ? [raw description] : @"");

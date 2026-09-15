@@ -485,7 +485,7 @@
     for (NSDictionary *d in self.allVoices) {
         if ([d[@"voiceID"] isEqualToString:vid]) { name = d[@"name"] ?: d[@"voiceID"]; break; }
     }
-    NSString *provider = (MVTTSProvider() == 1) ? @"千问" : @"CV";
+    NSString *provider = MVChannelShortName();   // ★ 2.8.35：自建 / CV / 千问
     NSMutableAttributedString *attr = [[NSMutableAttributedString alloc]
         initWithString:[NSString stringWithFormat:@"音色  "] attributes:@{NSFontAttributeName:[UIFont systemFontOfSize:13], NSForegroundColorAttributeName:[UIColor colorWithWhite:0 alpha:0.35]}];
     [attr appendAttributedString:[[NSAttributedString alloc] initWithString:name attributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:14], NSForegroundColorAttributeName:[UIColor colorWithWhite:0 alpha:0.85]}]];
@@ -639,7 +639,8 @@
                         return;
                     }
                     MVSetShared(@"currentVoiceID", vid);
-                    MVSetShared(@"ttsProvider", @0);
+                    // ★ 2.8.35：自建通道保持不动，其余切「云端 CosyVoice」
+                    if (MVChannel() != 0) MVSetShared(@"ttsChannel", @1);
                     MVSetShared(@"cosyModel", MVCosyModel());
                     [MyVoiceCloud clearSynthesisCache];
                     [self updateDialectButtons];
@@ -1167,12 +1168,19 @@
     self.selectedVoiceID = d[@"voiceID"];
     MVMarkVoiceUsed(d[@"voiceID"] ?: @"");           // ★ 2.8.7：记最近使用
     if ([d[@"provider"] integerValue] == 1) {
-        MVSetShared(@"ttsProvider", @1);
+        // ★ 2.8.35：千问族音色必须走「云端千问」通道（自建 / 云端Cosy 通道都会拒绝它）。
+        //   这里切换会明确提示 —— 绝不静默扣额度。
+        if (MVChannel() != 2) {
+            MVSetShared(@"ttsChannel", @2);
+            MVLog(@"[panel] 选千问音色 → 通道切到「云端千问」（按量计费）");
+            [[MyVoiceManager shared] toast:@"已切到「云端千问」通道（按量计费）"];
+        }
         MVSetShared(@"qwenVoice", self.selectedVoiceID);
         MVSetShared(@"qwenModel", d[@"model"] ?: @"qwen3-tts-flash");
         MVSetShared(@"mvBuiltinVoice", @"");
     } else {
-        MVSetShared(@"ttsProvider", @0);
+        // ★ 2.8.35：克隆 / CosyVoice 音色 —— 自建通道保持 0，只有从千问通道过来才切「云端 CosyVoice」
+        if (MVChannel() == 2) MVSetShared(@"ttsChannel", @1);
         MVSetShared(@"currentVoiceID", self.selectedVoiceID);
         MVSetShared(@"mvBuiltinVoice", [self.selectedVoiceID isEqualToString:[MyVoiceBuiltin yangjiangVoiceID]] ? @"yangjiang" : @"");
     }
@@ -1257,11 +1265,14 @@
     if (!MVAPIKey().length)  { [[MyVoiceManager shared] toast:@"未配置 API Key（设置→我的语音）"]; return; }
 
     NSInteger want = [d[@"provider"] integerValue];       // 1=千问 0=克隆
-    // 合成接口是按「当前服务商」分流的，试听别的音色时必须临时切过去（结束后恢复）
-    NSInteger oldProv = MVTTSProvider();
+    // 合成接口是按「当前通道」分流的，试听别的音色时必须临时切过去（结束后恢复）。
+    // ★ 2.8.35：切的是 ttsChannel（三档互斥），不再写 ttsProvider。
+    //   点「试听」是显式动作 —— 即便当前是自建通道，试听千问音色也允许（并在结束时还原）。
+    NSInteger oldCh = MVChannel();
+    NSInteger wantCh = (want == 1) ? 2 : 1;
     NSString *oldClone = MVGetStr(@"currentVoiceID");
     NSString *oldQwen  = MVGetStr(@"qwenVoice");
-    if (want != oldProv) MVSetShared(@"ttsProvider", @(want));
+    if (wantCh != oldCh) MVSetShared(@"ttsChannel", @(wantCh));
     if (want == 0) MVSetShared(@"currentVoiceID", vid);
     else           MVSetShared(@"qwenVoice", vid);
 
@@ -1269,7 +1280,7 @@
     [[MyVoiceManager shared] toast:@"正在合成试听…"];
     __weak typeof(self) ws = self;
     [[MyVoiceCloud shared] synthesizeText:text voiceID:vid completion:^(NSData *pcm, NSError *err){
-        MVSetShared(@"ttsProvider", @(oldProv));
+        MVSetShared(@"ttsChannel", @(oldCh));
         if (oldClone.length) MVSetShared(@"currentVoiceID", oldClone);
         if (oldQwen.length)  MVSetShared(@"qwenVoice", oldQwen);
         if (!pcm.length) {
@@ -1508,11 +1519,10 @@
 
 // ★ 2.8.34：只读状态 + 指路（配置统一放在 系统设置 → 我的语音 → 自建服务器）
 - (void)showSelfHostInfo {
-    BOOL on = MVSelfHostEnabled();
     NSString *msg = [NSString stringWithFormat:
-        @"状态：%@\n服务器：%@\n\n开关和地址请在【系统设置 → 我的语音 → 自建服务器】里修改，\n改完直接回聊天页即可生效（不用重启）。\n\n开启后：克隆 / CosyVoice 音色走你自己的电脑（免费、不耗额度）；\n千问预置音色仍走阿里云。\n\n⚠️ 首次开启或换了地址后，请重新点「＋音色管理」复刻一次克隆音色\n（参考音频会保存到手机本机，合成时发给你的服务器）。",
-        on ? @"已开启（CosyVoice 族走本地服务器，免额度）" : @"已关闭",
-        MVSelfHostURL() ?: @"(未填写)"];
+        @"当前通道：%@\n服务器：%@\n\n通道和地址请在【系统设置 → 我的语音 → 发音通道】里改，\n改完直接回聊天页即可生效（不用重启）。\n\n三条通道互斥，同一时刻只走一条：\n① 自建·免费 —— 走你电脑上的 CosyVoice，不耗额度；\n② 云端Cosy — 阿里云 CosyVoice，按量计费；\n③ 云端千问 — 阿里云预置音色，按量计费。\n\n⚠️ 选了「自建·免费」时千问一律不参与，不会偷偷扣额度。\n首次开启或换了地址后，请重新点「＋音色管理」复刻一次克隆音色\n（参考音频存在手机本机，合成时发给你的服务器）。\n\n（地址按脱密显示，完整值只在本机设置里。）",
+        MVChannelName(),
+        MVMaskHost(MVSelfHostURL())];
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"自建服务器"
         message:msg preferredStyle:UIAlertControllerStyleAlert];
     [ac addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];

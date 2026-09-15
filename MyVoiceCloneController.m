@@ -554,9 +554,12 @@
 
     MVSetSharedVoiceList(vs);   // ★ 2.8.13 跨 App 共享（微信/QQ 互通）
     MVSetShared(@"currentVoiceID", voiceID);
-    MVSetShared(@"ttsProvider", @0);    // ★ 关键：切到 CosyVoice，克隆才会被用上
+    // ★ 2.8.35：通道化 —— 只有「云端」通道才切到云端 CosyVoice；
+    //   自建通道(0)必须保持不动，否则会把用户刚设好的免费通道顶掉。
+    if (MVChannel() != 0) MVSetShared(@"ttsChannel", @1);
     MVSetShared(@"cosyModel", model);   // 复刻 / 合成统一用这个模型
-    MVLog(@"[clone] 已保存音色 %@ -> %@ (%@)，并自动切换 ttsProvider=0", entry[@"name"], voiceID, model);
+    MVLog(@"[clone] 已保存音色 %@ -> %@ (%@)，当前通道=%@",
+          entry[@"name"], voiceID, model, MVChannelName());
     // ★ 2.8.6：存完立刻试听一句（合成走刚选中的音色）
     [self auditionVoice:voiceID];
 }

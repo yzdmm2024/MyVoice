@@ -189,6 +189,26 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
     MVLog(@"[route] voiceID=%@ → model=%@ → %@ 通道%@", voiceID.length ? voiceID : @"(默认)",
           routeModel, audioFamily ? @"audio/tts(SpeechSynthesizer)" : @"multimodal-generation",
           (MVSelfHostEnabled() && audioFamily) ? @"（自建服务器）" : @"");
+    // ★ 2.8.35：通道互斥的**最后一道闸**。
+    //   选了「自建·免费」通道时，千问族（qwen3-tts-* / qwen-audio-3.0-tts-*）一律不放行 ——
+    //   否则用户以为在免费跑，实际每句都在扣额度，而且从界面/日志上都看不出来。
+    if (MVChannel() == 0 && !audioFamily) {
+        MVLog(@"[route] ⛔ 自建通道拦截千问族模型 %@（不允许跨通道消耗额度）", routeModel);
+        completion(nil, MVErr(@"当前是「自建服务器（免费）」通道，不会调用千问云端。\n\n"
+                              @"· 想听这个千问音色：设置 → 我的语音 → 发音通道 切到「云端千问」\n"
+                              @"· 想继续免费：在音色列表里选「我的克隆」或 CosyVoice 预置音色"));
+        return;
+    }
+    // ★ 2.8.35：通道互斥的**最后一道闸**。
+    //   选了「自建·免费」通道时，千问族（qwen3-tts-* / qwen-audio-3.0-tts-*）一律不放行 ——
+    //   否则用户以为在免费跑，实际每句都在扣额度，而且从界面/日志上都看不出来。
+    if (MVChannel() == 0 && !audioFamily) {
+        MVLog(@"[route] ⛔ 自建通道拦截千问族模型 %@（不允许跨通道消耗额度）", routeModel);
+        completion(nil, MVErr(@"当前是「自建服务器（免费）」通道，不会调用千问云端。\n\n"
+                              @"· 想听这个千问音色：设置 → 我的语音 → 发音通道 切到「云端千问」\n"
+                              @"· 想继续免费：在音色列表里选「我的克隆」或 CosyVoice 预置音色"));
+        return;
+    }
     if (audioFamily) {
         // ★ 2.8.33：自建服务器开启时，CosyVoice 族（克隆 / 预置）全部走本地 server.py，免额度
         if (MVSelfHostEnabled()) {
@@ -529,7 +549,9 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
     req.HTTPBody = json;
     req.timeoutInterval = 120;     // 本地 CPU 推理每句 3~10s，给足余量
 
-    MVLog(@"[selfhost] TTS 请求 %@ voice=%@ len=%lu", url, voiceID, (unsigned long)text.length);
+    // ★ 2.8.35：日志脱密 —— 公网地址不进日志文件
+    MVLog(@"[selfhost] TTS 请求 %@ voice=%@ len=%lu",
+          MVMaskHost(url), voiceID, (unsigned long)text.length);
     NSTimeInterval t0 = [[NSDate date] timeIntervalSince1970];
     [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e){
         if (e) { MVLog(@"[selfhost] 网络错误 %@", e); completion(nil, e); return; }

@@ -72,7 +72,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.8.34（★ 「自建服务器」开关/地址已搬到【系统设置 → 我的语音 → 自建服务器】，悬浮面板点了只显示状态并指路；删除用不到的「对象存储 OSS」整组；并修「设置页改了不生效」—— 自建键改为 jbroot 共享域优先读取，且面板不再写这三个键。★ 2.8.33 新增「自建服务器」开关：本地 CosyVoice + 阿里云 ECS 中转免费克隆音色；开启后 CosyVoice 族走本地 server.py 不再耗额度。★ 2.8.32 修「千问合成失败·url error!」：合成端点改为按【模型家族】分流 —— Qwen-TTS(qwen3-tts-*) 走 multimodal-generation，Qwen-Audio-TTS(qwen-audio-3.0-tts-*) / CosyVoice 走 /services/audio/tts/SpeechSynthesizer；旧版按 provider 分流，千问克隆音色被送错端点 → 服务端 400 url error，与充值/额度无关。同时修好预置音色选「可调版」不生效、报错信息带端点）");
+        MVLog(@"载入 我的语音 v2.8.35（★ 「自建服务器」开关/地址已搬到【系统设置 → 我的语音 → 自建服务器】，悬浮面板点了只显示状态并指路；删除用不到的「对象存储 OSS」整组；并修「设置页改了不生效」—— 自建键改为 jbroot 共享域优先读取，且面板不再写这三个键。★ 2.8.33 新增「自建服务器」开关：本地 CosyVoice + 阿里云 ECS 中转免费克隆音色；开启后 CosyVoice 族走本地 server.py 不再耗额度。★ 2.8.32 修「千问合成失败·url error!」：合成端点改为按【模型家族】分流 —— Qwen-TTS(qwen3-tts-*) 走 multimodal-generation，Qwen-Audio-TTS(qwen-audio-3.0-tts-*) / CosyVoice 走 /services/audio/tts/SpeechSynthesizer；旧版按 provider 分流，千问克隆音色被送错端点 → 服务端 400 url error，与充值/额度无关。同时修好预置音色选「可调版」不生效、报错信息带端点）");
         MVLog(@"宿主 App：%@（版本 %@）",
               [NSBundle mainBundle].bundleIdentifier ?: @"?",
               [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");
@@ -121,6 +121,17 @@
 // ============================================================
 %hook UIApplication
 - (void)sendEvent:(UIEvent *)event {
+    // ★★ 2.8.35 耗电修复 ★★
+    //   下面这段是 2.8.17 加的「真机抓包」诊断代码，以前是**无条件**跑的：
+    //   每次触摸都要逐级 superview（最多 5 层）做 NSStringFromClass + 11 次
+    //   containsString；命中（类名含 Btn/Button/Bar/Input/Tool/Voice/Record/Ptt，
+    //   在 QQ 里遍地都是）还要拼层级/手势/UIControl 长字符串并写日志 —— 而 MVLog
+    //   每条都是 NSLog + 开/seek/写/关文件。等于每点一下写一次盘。
+    //   两个后果：① 没打开悬浮面板也在耗电；② 给事件分发加了延迟。
+    //   现在：%orig 提到最前（热路径零额外延迟）+ 默认直接返回，
+    //   要抓包再去【设置 → 我的语音 → 诊断（排查用）】打开开关。
+    %orig;
+    if (!mvDiagTapLogEnabled()) return;
     if (mvDiagIsQQ()) {
         NSSet *touches = [event touchesForWindow:self.keyWindow] ?: event.allTouches;
         for (UITouch *tc in touches) {
@@ -158,6 +169,5 @@
             }
         }
     }
-    %orig;
 }
 %end

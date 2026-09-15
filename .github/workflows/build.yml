@@ -25,6 +25,17 @@ jobs:
       - name: Normalize control line endings (防止 CRLF 导致打包失败)
         run: sed -i '' 's/\r$//' control
 
+      - name: Build dylib (未 strip，供崩溃符号化)
+        run: make THEOS_PACKAGE_SCHEME=rootless || true
+
+      - name: 收集未 strip 的 MyVoice.dylib
+        if: always()
+        run: |
+          mkdir -p out
+          find .theos -name 'MyVoice.dylib' -exec cp -v {} out/ \;
+          cp -v MyVoice.plist out/ 2>/dev/null || true
+          ls -la out || true
+
       - name: Build rootless deb
         run: make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
 
@@ -34,4 +45,5 @@ jobs:
           name: myvoice
           path: |
             packages/*.deb
+            out/*.dylib
             .theos/artifacts/MyVoice.dylib

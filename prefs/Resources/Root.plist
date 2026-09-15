@@ -83,21 +83,42 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>自建服务器（免费·推荐）</string>
+			<string>发音通道（三选一 · 互斥）</string>
 			<key>footerText</key>
-			<string>开启后，克隆 / CosyVoice 音色改走你自建的服务器（本地电脑跑模型 + 阿里云 ECS 中转），完全免费、不消耗 API Key 额度。服务器地址填 ECS 中转后的公网地址，例：http://101.200.189.251:18000。⚠️ 首次开启或换了地址后，要重新点「＋音色管理」复刻一次克隆音色（参考音频会存在手机本机）。千问 Qwen 预置音色不受影响，仍走阿里云。</string>
+			<string>这里决定「声音从哪来」。三条路互斥，同一时刻只会走一条：① 自建·免费＝你自己电脑上跑 CosyVoice，免费、完全不碰阿里云、不耗 API Key；② 云端Cosy＝阿里云百炼的 CosyVoice，适合克隆/设计音色，按量计费；③ 云端千问＝阿里云百炼官方预置音色，不用克隆、开箱即用，按量计费。⚠️ 选①时千问一律不参与，所以不会出现"开了免费模式还在扣额度"。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
-			<string>PSSwitchCell</string>
+			<string>PSSegmentCell</string>
 			<key>label</key>
-			<string>启用自建服务器</string>
+			<string>发音通道</string>
 			<key>key</key>
-			<string>selfHostEnabled</string>
+			<string>ttsChannel</string>
+			<key>validValues</key>
+			<array>
+				<integer>0</integer>
+				<integer>1</integer>
+				<integer>2</integer>
+			</array>
+			<key>validTitles</key>
+			<array>
+				<string>自建·免费</string>
+				<string>云端Cosy</string>
+				<string>云端千问</string>
+			</array>
 			<key>default</key>
-			<false/>
+			<integer>2</integer>
 			<key>PostNotification</key>
 			<string>com.yzdmm2024.myvoice/settings</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>自建服务器（仅通道选「自建·免费」时生效）</string>
+			<key>footerText</key>
+			<string>通道选「自建·免费」后，克隆 / CosyVoice 音色改走你自建的服务器（本地电脑跑模型 + 阿里云 ECS 中转），免费、不消耗 API Key 额度。地址填 ECS 中转后的公网地址，形如 http://你的公网IP:端口 —— 出于安全，界面与日志里只显示脱密形式（如 http://1.2.*.*:18000），完整地址只存在本机设置里。⚠️ 首次开启或换了地址后，要回微信悬浮球点「＋音色管理」重新复刻一次克隆音色（参考音频会存在手机本机）。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -109,7 +130,7 @@
 			<key>default</key>
 			<string></string>
 			<key>placeholder</key>
-			<string>http://你的ECS公网IP:18000</string>
+			<string>http://你的公网IP:端口</string>
 			<key>PostNotification</key>
 			<string>com.yzdmm2024.myvoice/settings</string>
 		</dict>
@@ -126,36 +147,6 @@
 			<true/>
 			<key>placeholder</key>
 			<string>与服务端 API_TOKEN 一致；没设就留空</string>
-			<key>PostNotification</key>
-			<string>com.yzdmm2024.myvoice/settings</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>云端服务（引擎选「云端」时生效）</string>
-			<key>footerText</key>
-			<string>默认已改为「千问 Qwen-TTS」：官方预置音色，不用克隆、开箱即用，同一个 API Key 通用。音色在微信悬浮球面板里选（支持搜索/语速/语气），更多音色可在下方「千问音色」直接填英文 voice 名。CosyVoice＝克隆/设计你自己的音色（需先在悬浮球→音色管理里创建）。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSegmentCell</string>
-			<key>label</key>
-			<string>云端服务</string>
-			<key>key</key>
-			<string>ttsProvider</string>
-			<key>validValues</key>
-			<array>
-				<integer>0</integer>
-				<integer>1</integer>
-			</array>
-			<key>validTitles</key>
-			<array>
-				<string>CosyVoice 克隆</string>
-				<string>千问 Qwen-TTS</string>
-			</array>
-			<key>default</key>
-			<integer>1</integer>
 			<key>PostNotification</key>
 			<string>com.yzdmm2024.myvoice/settings</string>
 		</dict>
@@ -286,6 +277,27 @@
 			<key>placeholder</key>
 			<string>留空自动探测</string>
 		</dict>
+<dict>
+	<key>cell</key>
+	<string>PSGroupCell</string>
+	<key>label</key>
+	<string>诊断（排查用）</string>
+	<key>footerText</key>
+	<string>下面这个开关只在抓包排查时需要打开。默认关闭——关闭时插件在 QQ 里不会为每次点击采集视图树/手势，也不写日志（省电、不拖慢点击）。</string>
+</dict>
+<dict>
+	<key>cell</key>
+	<string>PSSwitchCell</string>
+	<key>label</key>
+	<string>记录触摸诊断（仅 QQ）</string>
+	<key>key</key>
+	<string>diagTapLog</string>
+	<key>default</key>
+	<false/>
+	<key>PostNotification</key>
+	<string>com.yzdmm2024.myvoice/settings</string>
+</dict>
+
 	</array>
 </dict>
 </plist>
