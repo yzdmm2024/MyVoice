@@ -740,7 +740,7 @@
     self.pickerView.backgroundColor = [UIColor clearColor];
 
     UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, W, 32)];
-    UILabel *pt = [[UILabel alloc] initWithFrame:CGRectMake(14, 6, W - 160, 20)];
+    UILabel *pt = [[UILabel alloc] initWithFrame:CGRectMake(14, 6, W - 200, 20)];
     pt.text = @"选择音色";
     pt.font = [UIFont boldSystemFontOfSize:15];
     pt.textColor = [UIColor colorWithWhite:0 alpha:0.9];
@@ -748,7 +748,7 @@
 
     self.reloadBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     [self.reloadBtn setTitle:@"刷新" forState:UIControlStateNormal];
-    self.reloadBtn.frame = CGRectMake(W - 68, 5, 54, 24);
+    self.reloadBtn.frame = CGRectMake(W - 62, 5, 54, 24);
     self.reloadBtn.titleLabel.font = [UIFont systemFontOfSize:12];
     [self.reloadBtn setTitleColor:[UIColor colorWithWhite:0 alpha:0.5] forState:UIControlStateNormal];
     [self.reloadBtn addTarget:self action:@selector(onReloadVoices) forControlEvents:UIControlEventTouchUpInside];
@@ -756,11 +756,19 @@
 
     self.pickerBackBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.pickerBackBtn setTitle:@"返回" forState:UIControlStateNormal];
-    self.pickerBackBtn.frame = CGRectMake(W - 128, 5, 52, 24);
+    self.pickerBackBtn.frame = CGRectMake(W - 122, 5, 52, 24);
     self.pickerBackBtn.titleLabel.font = [UIFont systemFontOfSize:12];
     [self.pickerBackBtn setTitleColor:[UIColor colorWithWhite:0 alpha:0.5] forState:UIControlStateNormal];
     [self.pickerBackBtn addTarget:self action:@selector(hidePicker) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:self.pickerBackBtn];
+    // ★ 2.8.38：补全「同步」按钮（2.8.37 的 EBUSY 竞态把创建代码吞掉了 → 按钮永不渲染、点了没反应）
+    self.syncBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.syncBtn setTitle:@"同步" forState:UIControlStateNormal];
+    self.syncBtn.frame = CGRectMake(136, 5, 56, 24);
+    self.syncBtn.titleLabel.font = [UIFont systemFontOfSize:12];
+    [self.syncBtn setTitleColor:[UIColor systemBlueColor] forState:UIControlStateNormal];
+    [self.syncBtn addTarget:self action:@selector(onSyncServerVoices) forControlEvents:UIControlEventTouchUpInside];
+    [header addSubview:self.syncBtn];
     [self.pickerView addSubview:header];
 
     CGFloat y = 34;
@@ -1117,6 +1125,21 @@
             }
             [self refreshVoiceState];
             [self.voiceTable reloadData];
+            // ★ 2.8.38：若当前卡在缺参考音频的克隆音色，同步后自动切到第一个服务器音色
+            if ([self.selectedVoiceID hasPrefix:@"myvoice"] && MVServerVoices().count) {
+                NSDictionary *firstSrv = MVServerVoices().firstObject;
+                NSString *svid = firstSrv[@"voiceID"] ?: @"";
+                if (svid.length) {
+                    self.selectedVoiceID = svid;
+                    MVMarkVoiceUsed(svid);
+                    if (MVChannel() == 2) MVSetShared(@"ttsChannel", @1);
+                    MVSetShared(@"currentVoiceID", svid);
+                    MVSetShared(@"mvBuiltinVoice", @"");
+                    [self.voiceTable reloadData];
+                    [[MyVoiceManager shared] toast:@"已切换到服务器音色（电脑语音包）"];
+                    return;
+                }
+            }
             [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"已同步 %ld 个服务器音色", (long)count]];
         });
     }];
