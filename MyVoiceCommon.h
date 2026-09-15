@@ -1490,13 +1490,50 @@ static inline NSString* MVSelfHostToken(void) {
 // ★ 2.8.37：自建服务器「同步服务器音色」—— 把电脑上 server.py 的 voices/ 语音包与模型预置音色
 //   拉到手机列表里。只存元数据（id/label），参考音频永远留在服务器；
 //   合成时发 voice=<id>，服务端自己读 voices/<id>/ref.wav。
+// ★ 2.8.40：读端对齐 MVVoices() —— 全局域 → jbroot 共享 plist → 本 App 容器，三路合并按 voiceID 去重。
+//   旧版只读 MVSharedPrefs()（jbroot plist 文件）：而 MVSetShared 写 jbroot 常被微信沙箱拒绝，
+//   值其实只落进了容器 —— 于是「同步成功、音色也存了，列表却永远空」。这是同步没反应的根因。
 static inline NSArray* MVServerVoices(void) {
+    NSMutableArray *out = [NSMutableArray array];
+    // ① 全局域（kCFPreferencesAnyUser）—— 跨 App 最稳的通道
+    CFPropertyListRef gv = CFPreferencesCopyValue((__bridge CFStringRef)@"selfHostVoices",
+        (__bridge CFStringRef)MV_PREFS_ID, kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
+    if (gv) {
+        NSArray *a = CFBridgingRelease(gv);
+        if ([a isKindOfClass:[NSArray class]]) [out addObjectsFromArray:a];
+    }
+    // ② jbroot 共享 plist
     NSDictionary *sh = MVSharedPrefs();
-    id v = [sh isKindOfClass:[NSDictionary class]] ? sh[@"selfHostVoices"] : nil;
-    return [v isKindOfClass:[NSArray class]] ? v : @[];
+    id sv = [sh isKindOfClass:[NSDictionary class]] ? sh[@"selfHostVoices"] : nil;
+    if ([sv isKindOfClass:[NSArray class]]) {
+        for (NSDictionary *d in (NSArray*)sv) {
+            BOOL dup = NO;
+            for (NSDictionary *e in out) if ([e[@"voiceID"] isEqualToString:d[@"voiceID"]]) { dup = YES; break; }
+            if (!dup) [out addObject:d];
+        }
+    }
+    // ③ 本 App 容器（同步时刚写入的副本）
+    id cv = [MVPrefs() objectForKey:@"selfHostVoices"];
+    if ([cv isKindOfClass:[NSArray class]]) {
+        for (NSDictionary *d in (NSArray*)cv) {
+            BOOL dup = NO;
+            for (NSDictionary *e in out) if ([e[@"voiceID"] isEqualToString:d[@"voiceID"]]) { dup = YES; break; }
+            if (!dup) [out addObject:d];
+        }
+    }
+    return out.count ? out : @[];
 }
 static inline void MVSetServerVoices(NSArray *a) {
-    MVSetShared(@"selfHostVoices", a ?: @[]);
+    if (!a) a = @[];
+    MVSetShared(@"selfHostVoices", a);
+    // ★ 2.8.40：额外写一份到 CFPreferences 全局域（同 MVSetSharedVoiceList 的做法），
+    //   保证读端任一条通道都拿得到；写容器/jbroot 失败也不影响列表显示。
+    CFPreferencesSetValue((__bridge CFStringRef)@"selfHostVoices",
+                          (__bridge CFPropertyListRef)a,
+                          (__bridge CFStringRef)MV_PREFS_ID,
+                          kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
+    CFPreferencesSynchronize((__bridge CFStringRef)MV_PREFS_ID,
+                             kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
 }
 
 // ★ 克隆音色复刻时把参考音频存到本机沙盒；合成时作为 ref_audio_b64 发给 server.py 做零样本复刻。
