@@ -889,6 +889,18 @@ static inline NSArray* MVQwenVoiceList(void) {
 ];
 }
 
+// ★ 2.8.32：这个 voiceID 是不是【千问预置音色】？
+//   是预置 → 合成模型听用户在面板选的「千问模型」档位（标准版 / 可调版）；
+//   是克隆（myvoice-*）→ 必须用它自己复刻时绑定的 target_model，用户档位管不到它。
+//   旧版不分这两种，一律取音色列表里写死的 qwen3-tts-flash ——
+//   于是用户选了「可调版」也没用（instructions 永远不生效），"调了没反应"。
+static inline BOOL MVIsQwenPresetVoice(NSString *vid) {
+    if (!vid.length) return NO;
+    for (NSDictionary *d in MVQwenVoiceList())
+        if ([d[@"voiceID"] isEqualToString:vid]) return YES;
+    return NO;
+}
+
 #pragma mark - ★ 2.8.7 千问可调 / 预设 / 模板 / 最近使用 / 友好报错
 
 // ===== 千问(Qwen-TTS)为什么"调了没反应"——官方 2026-09 文档，端点不可混用 =====
@@ -1038,7 +1050,15 @@ static inline NSString* MVFriendlyAPIError(NSInteger code, NSString *body, NSStr
         }
     }
     NSString *why = nil;
-    if ([errCode containsString:@"InvalidApiKey"] || code == 401)
+    // ★ 2.8.32：官方错误码文档「原因一：模型名称与 API 端点不匹配」。
+    //   Qwen-TTS(qwen3-tts-*) → multimodal-generation/generation；
+    //   Qwen-Audio-TTS(qwen-audio-3.0-tts-*) / CosyVoice → /services/audio/tts/SpeechSynthesizer。
+    //   必须放在下面那条泛化的「model + 400」之前，否则会被吞掉成"模型名不支持"。
+    if ([errMsg rangeOfString:@"url error" options:NSCaseInsensitiveSearch].location != NSNotFound)
+        why = @"模型与接口端点不匹配（该模型不在这条通道上：\n"
+              @"qwen3-tts-* 走 multimodal-generation，qwen-audio-3.0-tts-* / cosyvoice-* 走 audio/tts；\n"
+              @"若当前是「克隆」音色，它锁定了自己的模型与端点，换成预置音色即可）";
+    else if ([errCode containsString:@"InvalidApiKey"] || code == 401)
         why = @"API Key 无效或已失效（去 设置→我的语音 重填北京地域的 DashScope Key）";
     else if ([raw containsString:@"Free quota"] || [raw containsString:@"use free tier only"] ||
              [raw containsString:@"exhausted"] || [raw containsString:@"paid basis"] || [raw containsString:@"add funds"])

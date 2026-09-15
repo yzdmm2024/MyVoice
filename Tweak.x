@@ -72,7 +72,7 @@
         //           → refreshSession → MVService/NSClassFromString → WeChat +initialize 💥
         //
         //   结论：%ctor 内**只允许**做与宿主完全无关的事（写日志、入队）。
-        MVLog(@"载入 我的语音 v2.8.20（★ QQ 全自动发送修复：tweak 启动即挂 didTriggeredRecord/createRecorder/QQPushToTalkView 三钩子（带类加载重试），用户切语音模式时 didMoveToWindow 已被钩住 → 成功扣留视图实例；点合成语音直接 startRecordAsync 开始 + sendRecordData 发送，无需手动按住）");
+        MVLog(@"载入 我的语音 v2.8.32（★ 修「千问合成失败·模型名不支持·url error!」：合成端点改为按【模型家族】分流 —— Qwen-TTS(qwen3-tts-*) 走 multimodal-generation，Qwen-Audio-TTS(qwen-audio-3.0-tts-*) / CosyVoice 走 /services/audio/tts/SpeechSynthesizer；旧版按 provider 分流，千问克隆音色被送错端点 → 服务端 400 url error，与充值/额度无关。同时修好预置音色选「可调版」不生效、报错信息带端点）");
         MVLog(@"宿主 App：%@（版本 %@）",
               [NSBundle mainBundle].bundleIdentifier ?: @"?",
               [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?");

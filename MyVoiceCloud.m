@@ -174,11 +174,25 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
         if (pcm.length && !e) MVTTSCachePut(key, pcm);
         completion(pcm, e);
     };
-    if (MVVoiceProvider(voiceID) == 1) {
-        [self synthesizeQwenText:text voiceID:voiceID completion:wrap];
+    // ★ 2.8.32：分流必须按【模型家族】，不能按 provider。
+    //   官方文档（模型与端点必须匹配，否则 400「url error, please check url!」）：
+    //     · Qwen-TTS  qwen3-tts-flash / qwen3-tts-instruct-flash
+    //       → https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
+    //     · Qwen-Audio-TTS qwen-audio-3.0-tts-plus / -flash，与 CosyVoice cosyvoice-*
+    //       → {业务空间}.cn-beijing.maas.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer
+    //   旧版按 provider 分流：千问克隆音色(myvoice-*，复刻时绑定 target_model=qwen-audio-3.0-tts-plus)
+    //   被送进了 Qwen-TTS 专用端点 → 服务端必然返回 url error → 面板显示「千问合成失败/模型名不支持」。
+    //   这条报错跟充没充值、有没有额度毫无关系，换模型档位也没用（克隆音色锁定自己的模型）。
+    NSString *routeModel = MVModelForVoice(voiceID);
+    if (!routeModel.length) routeModel = (MVTTSProvider() == 1) ? MVQwenModel() : MVCosyModel();
+    BOOL audioFamily = [routeModel hasPrefix:@"qwen-audio-3.0-tts"] || [routeModel hasPrefix:@"cosyvoice"];
+    MVLog(@"[route] voiceID=%@ → model=%@ → %@ 通道", voiceID.length ? voiceID : @"(默认)",
+          routeModel, audioFamily ? @"audio/tts(SpeechSynthesizer)" : @"multimodal-generation");
+    if (audioFamily) {
+        [self synthesizeCosyText:text voiceID:voiceID completion:wrap];
         return;
     }
-    [self synthesizeCosyText:text voiceID:voiceID completion:wrap];
+    [self synthesizeQwenText:text voiceID:voiceID completion:wrap];
 }
 
 #pragma mark - ★ 2.2.7 预合成 / 连接预热
@@ -246,10 +260,20 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
     if (!apiKey.length) { completion(nil, MVErr(@"未配置 DashScope API Key（设置→我的语音）")); return; }
     if (!text.length)   { completion(nil, MVErr(@"文字为空")); return; }
     NSString *voice = voiceID.length ? voiceID : MVQwenVoice();
-    // ★ 2.8.30：模型必须由音色自身决定。千问克隆(myvoice-xxxx)绑定 qwen-audio-3.0-tts-plus，
-    //   写死 MVQwenModel()(qwen3-tts-flash) 会让克隆 id 被当预置音色 → 音色不匹配 → 普通话。
-    NSString *model = MVModelForVoice(voiceID);
+    // ★ 2.8.30：克隆音色必须用它自己复刻时绑定的 target_model（voice_id 与 target_model 强绑定，
+    //   合成时模型不一致会失败、或退化回普通话），不能写死 MVQwenModel()。
+    // ★ 2.8.32：但【预置音色】反过来必须听用户在面板选的「千问模型」档位 ——
+    //   旧版一律取音色列表里写死的 qwen3-tts-flash，用户点了「可调版」也被覆盖掉，
+    //   于是 instructions（风格 / 语速）永远不生效，表现就是"调了没反应"。
+    NSString *model = MVIsQwenPresetVoice(voiceID) ? MVQwenModel() : MVModelForVoice(voiceID);
     if (!model.length) model = MVQwenModel();
+    // ★ 2.8.32 安全网：Qwen-Audio-TTS 族不在本端点上（详见 MVFriendlyAPIError 里 url error 的说明）。
+    //   万一走到这里（典型是克隆音色），立刻转正确通道，绝不发出一个必然 400 的请求。
+    if ([model hasPrefix:@"qwen-audio-3.0-tts"]) {
+        MVLog(@"[qwen] 模型 %@ 属 Qwen-Audio-TTS 族 → 转 audio/tts(SpeechSynthesizer) 通道", model);
+        [self synthesizeCosyText:text voiceID:(voiceID.length ? voiceID : voice) completion:completion];
+        return;
+    }
     NSString *url = @"https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
     NSMutableDictionary *input = [NSMutableDictionary dictionaryWithDictionary:@{
         @"text": text,
@@ -410,7 +434,7 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
         if (code != 200) {
             NSString *msg = [[NSString alloc] initWithData:d?:[NSData data] encoding:NSUTF8StringEncoding];
             MVLog(@"[cloud] TTS HTTP %ld body=%@", (long)code, msg);
-            completion(nil, MVErr(MVFriendlyAPIError(code, msg, [NSString stringWithFormat:@"CosyVoice 合成失败(模型 %@)", model])));
+            completion(nil, MVErr(MVFriendlyAPIError(code, msg, [NSString stringWithFormat:@"语音合成失败(模型 %@)", model])));
             return;
         }
         // ★ 2.4.3：真机抓包确认响应结构是 output.audio.url（http 链接，24h 有效），
