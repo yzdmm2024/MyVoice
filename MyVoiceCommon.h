@@ -1354,20 +1354,40 @@ static inline NSInteger MVVoiceProvider(NSString *vid) {
 }
 
 
-// ===== ★ 2.8.33：自建服务器（本地 CosyVoice + 阿里云 ECS 中转，免费克隆音色）=====
+// ===== ★ 2.8.33 新增 / ★ 2.8.34 调整：自建服务器（本地 CosyVoice + ECS 中转，免费克隆音色）=====
 //   开关/地址/令牌：开启后，CosyVoice 族（克隆 / 设计 / 预置）全部走本地 server.py，
 //   不再消耗 DashScope 额度；千问预置音色仍走阿里云。
+//
+//   ★ 2.8.34 关键：这三个键【只由「系统设置 → 我的语音」写入】（落 jbroot 共享域）。
+//   为什么不能沿用 MVGet 的默认顺序：MVGet 是【容器 suite 优先】（见上文 2.4.3 的说明），
+//   而 Settings 进程写不到微信容器 —— 设置页改的值会被容器里的旧值遮住，表现为
+//   「设置页改了不生效」。历史上 ttsProvider / qwenVoice 就是这么被坑的。
+//   所以自建键单独走【jbroot 共享域优先】，顺带自愈 2.8.33 残留在容器里的旧值。
+//   ⚠️ 前提：面板（微信进程内）【不能再写这三个键】，否则又会被容器遮住。
+//      → 面板已改为只读状态提示（见 MyVoicePanel 的 showSelfHostInfo）。
+static inline id MVSelfHostGet(NSString *key) {
+    NSDictionary *sh = MVSharedPrefs();
+    if ([sh isKindOfClass:[NSDictionary class]]) {
+        id v = sh[key];
+        if (v) return v;
+    }
+    return MVGet(key);
+}
 static inline BOOL MVSelfHostEnabled(void) {
-    id v = MVGet(@"selfHostEnabled");
+    id v = MVSelfHostGet(@"selfHostEnabled");
     return v ? [v boolValue] : NO;
 }
 static inline NSString* MVSelfHostURL(void) {
-    NSString *v = MVGetStr(@"selfHostURL");
+    id raw = MVSelfHostGet(@"selfHostURL");
+    NSString *v = [raw isKindOfClass:[NSString class]] ? raw : (raw ? [raw description] : @"");
     if (!v.length) return @"http://127.0.0.1:8000";   // 默认本机调试（手机与服务器同网 / 隧道）
     if ([v hasSuffix:@"/"]) v = [v substringToIndex:v.length - 1];
     return v;
 }
-static inline NSString* MVSelfHostToken(void) { return MVGetStr(@"selfHostToken"); }
+static inline NSString* MVSelfHostToken(void) {
+    id raw = MVSelfHostGet(@"selfHostToken");
+    return [raw isKindOfClass:[NSString class]] ? raw : (raw ? [raw description] : @"");
+}
 
 // ★ 克隆音色复刻时把参考音频存到本机沙盒；合成时作为 ref_audio_b64 发给 server.py 做零样本复刻。
 static inline NSString* MVSelfHostRefAudioDir(void) {

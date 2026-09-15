@@ -54,7 +54,7 @@
 			<key>label</key>
 			<string>合成引擎</string>
 			<key>footerText</key>
-			<string>离线＝系统中文语音（机器人音，免费、不联网）；云端＝联网合成。选「云端」后请在下面「云端服务」里二选一。</string>
+			<string>离线＝系统中文语音（机器人音，免费、不联网）；云端＝联网合成。选「云端」后请在下面「云端服务」里二选一；若你开了下面「自建服务器」，克隆音色会改走你自己的电脑（免费）。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -79,6 +79,56 @@
 			<string>com.yzdmm2024.myvoice/settings</string>
 		</dict>
 
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>自建服务器（免费·推荐）</string>
+			<key>footerText</key>
+			<string>开启后，克隆 / CosyVoice 音色改走你自建的服务器（本地电脑跑模型 + 阿里云 ECS 中转），完全免费、不消耗 API Key 额度。服务器地址填 ECS 中转后的公网地址，例：http://101.200.189.251:18000。⚠️ 首次开启或换了地址后，要重新点「＋音色管理」复刻一次克隆音色（参考音频会存在手机本机）。千问 Qwen 预置音色不受影响，仍走阿里云。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>启用自建服务器</string>
+			<key>key</key>
+			<string>selfHostEnabled</string>
+			<key>default</key>
+			<false/>
+			<key>PostNotification</key>
+			<string>com.yzdmm2024.myvoice/settings</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>label</key>
+			<string>服务器地址</string>
+			<key>key</key>
+			<string>selfHostURL</string>
+			<key>default</key>
+			<string></string>
+			<key>placeholder</key>
+			<string>http://你的ECS公网IP:18000</string>
+			<key>PostNotification</key>
+			<string>com.yzdmm2024.myvoice/settings</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>label</key>
+			<string>访问令牌（可选）</string>
+			<key>key</key>
+			<string>selfHostToken</string>
+			<key>default</key>
+			<string></string>
+			<key>isPassword</key>
+			<true/>
+			<key>placeholder</key>
+			<string>与服务端 API_TOKEN 一致；没设就留空</string>
+			<key>PostNotification</key>
+			<string>com.yzdmm2024.myvoice/settings</string>
+		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
@@ -165,16 +215,16 @@
 			<key>label</key>
 			<string>怎么创建音色（两种方式）</string>
 			<key>footerText</key>
-			<string>在微信里做（设置里没有麦克风权限）：打开微信任意聊天 → 点悬浮球 “语” → 点“音色管理”。① 文字设计：填一句描述（如“沉稳的中年男性播音员”）→ 生成音色。不需要录音、不需要 OSS，只需上面的 API Key。② 录音复刻：朗读 15~30 秒干声，需要下面的 OSS。创建后在悬浮球面板里选音色即可。</string>
+			<string>在微信里做（设置里没有麦克风权限）：打开微信任意聊天 → 点悬浮球 “语” → 点“音色管理”。① 文字设计：填一句描述（如“沉稳的中年男性播音员”）→ 生成音色，不需要录音。② 录音复刻：朗读 15~30 秒干声，自动复刻。两种方式都不需要 OSS。创建后在悬浮球面板里选音色即可。</string>
 		</dict>
 
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>阿里云百炼 DashScope（必填）</string>
+			<string>阿里云百炼 DashScope（云端合成用；开了自建服务器可留空）</string>
 			<key>footerText</key>
-			<string>任何功能都只用这一项就够：到 bailian.console.aliyun.com 开通，右上角地域选【华北2 北京】，底部“API Key”卡片创建（sk- 开头，创建时只显示一次）。Key 只存在本机。</string>
+			<string>只有「走阿里云合成」时才需要：到 bailian.console.aliyun.com 开通，右上角地域选【华北2 北京】，底部“API Key”卡片创建（sk- 开头，创建时只显示一次）。Key 只存在本机。若已开启【自建服务器】，克隆音色走你自己的电脑，这一项可以完全不填；但千问预置音色仍需用它。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -215,68 +265,6 @@
 			<string>testAPIKey</string>
 		</dict>
 
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>对象存储 OSS（只做「录音复刻」才需要）</string>
-			<key>footerText</key>
-			<string>用「文字设计」创建音色的话，这里整段可以全部留空、完全不用配（下面的测试按钮也不用点）。只有「录音复刻」才要把参考音频托管到公网 URL 给百炼抓取：OSS 控制台建一个 Bucket（地域选北京、关掉「阻止公共访问」、读写权限设公共读），Endpoint 填 oss-cn-beijing.aliyuncs.com（不带 https://、不带 bucket 名）。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSEditTextCell</string>
-			<key>label</key>
-			<string>Bucket</string>
-			<key>key</key>
-			<string>ossBucket</string>
-			<key>default</key>
-			<string></string>
-			<key>placeholder</key>
-			<string>myvoice-audio</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSEditTextCell</string>
-			<key>label</key>
-			<string>Endpoint</string>
-			<key>key</key>
-			<string>ossHost</string>
-			<key>default</key>
-			<string></string>
-			<key>placeholder</key>
-			<string>oss-cn-hangzhou.aliyuncs.com</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSEditTextCell</string>
-			<key>label</key>
-			<string>AccessKey</string>
-			<key>key</key>
-			<string>ossAk</string>
-			<key>default</key>
-			<string></string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSEditTextCell</string>
-			<key>label</key>
-			<string>Secret</string>
-			<key>key</key>
-			<string>ossSk</string>
-			<key>default</key>
-			<string></string>
-			<key>isPassword</key>
-			<true/>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSButtonCell</string>
-			<key>label</key>
-			<string>测试 OSS 地址与公共读</string>
-			<key>action</key>
-			<string>testOSS</string>
-		</dict>
 
 		<dict>
 			<key>cell</key>

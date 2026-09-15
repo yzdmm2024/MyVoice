@@ -1494,46 +1494,28 @@
             UIPasteboard.generalPasteboard.string = MVLogFilePath() ?: @"";
             [[MyVoiceManager shared] toast:@"日志路径已复制到剪贴板"];
         }]];
+    // ★ 2.8.34：自建服务器的开关/地址统一到「系统设置 → 我的语音 → 自建服务器」里配置。
+    //   面板这里【绝不能再写】这三个键 —— 面板跑在微信进程里，MVSetShared 会把值写进微信容器，
+    //   而 MVGet 是「容器优先」，会把设置页写在 jbroot 里的值遮住 → 设置页改了不生效。
     [ac addAction:[UIAlertAction actionWithTitle:
         [NSString stringWithFormat:@"自建服务器：%@", MVSelfHostEnabled() ? @"已开启" : @"已关闭"]
-        style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
-            MVSetShared(@"selfHostEnabled", @(!MVSelfHostEnabled()));
-            [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"自建服务器已%@",
-                MVSelfHostEnabled() ? @"开启（CosyVoice 族走本地服务器，免额度）" : @"关闭"]];
-            [self refreshVoiceState];
-        }]];
-    [ac addAction:[UIAlertAction actionWithTitle:@"配置自建服务器" style:UIAlertActionStyleDefault
-        handler:^(UIAlertAction *a){ [self showSelfHostConfig]; }]];
+        style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ [self showSelfHostInfo]; }]];
     [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     ac.popoverPresentationController.sourceView = self.moreBtn ?: self.homeView;
     ac.popoverPresentationController.sourceRect = self.moreBtn.bounds;
     [self mvPresent:ac];
 }
 
-- (void)showSelfHostConfig {
-    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"自建服务器地址"
-        message:@"填 ECS 中转后的公网地址（server.py 监听 127.0.0.1:8000，由 ECS frp 中转暴露）。\n例：http://你的ECS公网IP:端口" preferredStyle:UIAlertControllerStyleAlert];
-    [ac addTextFieldWithConfigurationHandler:^(UITextField *t){
-        t.placeholder = @"http://127.0.0.1:8000";
-        t.text = MVSelfHostURL();
-        t.keyboardType = UIKeyboardTypeURL;
-    }];
-    [ac addTextFieldWithConfigurationHandler:^(UITextField *t){
-        t.placeholder = @"访问令牌（可选，与 server.py 的 API_TOKEN 对应）";
-        t.text = MVSelfHostToken();
-        t.secureTextEntry = YES;
-    }];
-    [ac addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault
-        handler:^(UIAlertAction *a){
-            NSString *u = [ac.textFields[0].text stringByTrimmingCharactersInSet:
-                [NSCharacterSet whitespaceAndNewlineCharacterSet]] ?: @"";
-            MVSetShared(@"selfHostURL", u);
-            NSString *tk = [ac.textFields[1].text stringByTrimmingCharactersInSet:
-                [NSCharacterSet whitespaceAndNewlineCharacterSet]] ?: @"";
-            MVSetShared(@"selfHostToken", tk);
-            [[MyVoiceManager shared] toast:@"自建服务器地址已保存"];
-        }]];
-    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+// ★ 2.8.34：只读状态 + 指路（配置统一放在 系统设置 → 我的语音 → 自建服务器）
+- (void)showSelfHostInfo {
+    BOOL on = MVSelfHostEnabled();
+    NSString *msg = [NSString stringWithFormat:
+        @"状态：%@\n服务器：%@\n\n开关和地址请在【系统设置 → 我的语音 → 自建服务器】里修改，\n改完直接回聊天页即可生效（不用重启）。\n\n开启后：克隆 / CosyVoice 音色走你自己的电脑（免费、不耗额度）；\n千问预置音色仍走阿里云。\n\n⚠️ 首次开启或换了地址后，请重新点「＋音色管理」复刻一次克隆音色\n（参考音频会保存到手机本机，合成时发给你的服务器）。",
+        on ? @"已开启（CosyVoice 族走本地服务器，免额度）" : @"已关闭",
+        MVSelfHostURL() ?: @"(未填写)"];
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"自建服务器"
+        message:msg preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self mvPresent:ac];
 }
 
