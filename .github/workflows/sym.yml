@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'git ref / sha to build'
+        description: 'git ref / full sha to build'
         required: true
         default: main
       label:
@@ -27,16 +27,17 @@ jobs:
         run: git clone --recursive https://github.com/theos/theos.git "$THEOS"
       - name: Vendor Flite (best effort)
         run: bash flite/vendor.sh || true
-      - name: Build dylib unstripped
-        run: make THEOS_PACKAGE_SCHEME=rootless || true
-      - name: Collect unstripped dylib
+      - name: Build with release flags (FINALPACKAGE=1)
+        run: make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless || true
+      - name: Collect unstripped dylib + deb
         if: always()
         run: |
           mkdir -p out
           find .theos -name 'MyVoice.dylib' -exec cp -v {} out/ \;
+          cp -v packages/*.deb out/ 2>/dev/null || true
           ls -la out || true
       - uses: actions/upload-artifact@v4
         with:
           name: sym-${{ inputs.label }}
-          path: out/*.dylib
+          path: out/*
           if-no-files-found: warn
