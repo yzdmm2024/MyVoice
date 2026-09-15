@@ -79,6 +79,7 @@
 @property (nonatomic, strong) UILabel *sectionLabel;
 @property (nonatomic, strong) UITableView *voiceTable;
 @property (nonatomic, strong) UIButton *reloadBtn;
+@property (nonatomic, strong) UIButton *syncBtn;
 @property (nonatomic, strong) UIButton *pickerBackBtn;
 @property (nonatomic, strong) NSArray *allVoices;
 @property (nonatomic, strong) NSArray *filteredVoices;
@@ -184,6 +185,16 @@
         NSMutableDictionary *m = [d mutableCopy];
         m[@"provider"] = @0;
         [out addObject:m];
+    }
+    // ★ 2.8.37：自建服务器音色（电脑上的语音包 / 模型预置）—— 仅自建通道显示
+    if (MVSelfHostEnabled()) {
+        for (NSDictionary *d in MVServerVoices()) {
+            NSMutableDictionary *m = [d mutableCopy];
+            m[@"provider"]   = @0;        // 归到 CosyVoice 通道
+            m[@"serverVoice"] = @YES;     // 标记：不可删、合成不带 ref
+            if (!m[@"model"]) m[@"model"] = @"cosyvoice-v3.5-plus";
+            [out addObject:m];
+        }
     }
     return out;
 }
@@ -510,15 +521,19 @@
 
 // 音色列表分节：千问预置一大坨 + 我的克隆搅在一起，36 个平铺根本找不到自己的音色
 - (void)rebuildVoiceSections {
-    NSMutableArray *qwen = [NSMutableArray array], *mine = [NSMutableArray array];
+    NSMutableArray *qwen = [NSMutableArray array], *mine = [NSMutableArray array], *srv = [NSMutableArray array];
     for (NSDictionary *d in self.filteredVoices) {
-        ([d[@"provider"] integerValue] == 1) ? [qwen addObject:d] : [mine addObject:d];
+        if ([d[@"provider"] integerValue] == 1) [qwen addObject:d];
+        else if ([d[@"serverVoice"] boolValue]) [srv addObject:d];
+        else [mine addObject:d];
     }
     NSMutableArray *secs = [NSMutableArray array];
     if (qwen.count) [secs addObject:@{@"title": [NSString stringWithFormat:@"千问预置 · %lu", (unsigned long)qwen.count],
                                       @"items": qwen}];
     if (mine.count) [secs addObject:@{@"title": [NSString stringWithFormat:@"我的克隆 · %lu", (unsigned long)mine.count],
                                       @"items": mine}];
+    if (srv.count) [secs addObject:@{@"title": [NSString stringWithFormat:@"服务器音色 · %lu", (unsigned long)srv.count],
+                                     @"items": srv}];
 
     // ★ 2.8.7：最近使用置顶（最多 5 个，且仍在当前搜索/过滤结果里）
     NSMutableArray *rec = [NSMutableArray array];
@@ -1089,7 +1104,24 @@
         : @"已纠偏"];
 }
 - (void)onReloadVoices { [self refreshVoiceState]; [self.voiceTable reloadData]; [[MyVoiceManager shared] toast:@"已刷新"]; }
-- (void)showPicker { self.homeView.hidden = YES; self.pickerView.hidden = NO; [self refreshVoiceState]; [self layoutPickerRows]; [self.searchBar resignFirstResponder]; }
+// ★ 2.8.37：同步服务器音色（自建通道下可用）
+- (void)onSyncServerVoices {
+    if (!MVSelfHostEnabled()) { [[MyVoiceManager shared] toast:@"请先在设置开启「自建服务器」通道"]; return; }
+    self.syncBtn.enabled = NO;
+    [[MyVoiceCloud shared] syncServerVoicesWithCompletion:^(NSInteger count, NSError *err){
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.syncBtn.enabled = YES;
+            if (err) {
+                [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"同步失败：%@", err.localizedDescription]];
+                return;
+            }
+            [self refreshVoiceState];
+            [self.voiceTable reloadData];
+            [[MyVoiceManager shared] toast:[NSString stringWithFormat:@"已同步 %ld 个服务器音色", (long)count]];
+        });
+    }];
+}
+- (void)showPicker { self.homeView.hidden = YES; self.pickerView.hidden = NO; self.syncBtn.hidden = !MVSelfHostEnabled(); [self refreshVoiceState]; [self layoutPickerRows]; [self.searchBar resignFirstResponder]; }
 - (void)hidePicker { self.pickerView.hidden = YES; self.homeView.hidden = NO; [self refreshVoiceState]; }
 
 #pragma mark - 搜索
@@ -1194,6 +1226,7 @@
     if (!ip) return;
     NSDictionary *d = [self voiceAt:ip];
     if (!d) return;                                   // ★ 2.8.7：标题行跳过
+    if ([d[@"serverVoice"] boolValue]) { [[MyVoiceManager shared] toast:@"服务器音色不可删（在电脑上增删）"]; return; }
     if ([d[@"provider"] integerValue] == 1) { [[MyVoiceManager shared] toast:@"千问预置不可删"]; return; }
     NSString *vid = d[@"voiceID"] ?: @"";
     NSString *name = d[@"name"] ?: vid;

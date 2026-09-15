@@ -1477,6 +1477,18 @@ static inline NSString* MVSelfHostToken(void) {
     return [raw isKindOfClass:[NSString class]] ? raw : (raw ? [raw description] : @"");
 }
 
+// ★ 2.8.37：自建服务器「同步服务器音色」—— 把电脑上 server.py 的 voices/ 语音包与模型预置音色
+//   拉到手机列表里。只存元数据（id/label），参考音频永远留在服务器；
+//   合成时发 voice=<id>，服务端自己读 voices/<id>/ref.wav。
+static inline NSArray* MVServerVoices(void) {
+    NSDictionary *sh = MVSharedPrefs();
+    id v = [sh isKindOfClass:[NSDictionary class]] ? sh[@"selfHostVoices"] : nil;
+    return [v isKindOfClass:[NSArray class]] ? v : @[];
+}
+static inline void MVSetServerVoices(NSArray *a) {
+    MVSetShared(@"selfHostVoices", a ?: @[]);
+}
+
 // ★ 克隆音色复刻时把参考音频存到本机沙盒；合成时作为 ref_audio_b64 发给 server.py 做零样本复刻。
 static inline NSString* MVSelfHostRefAudioDir(void) {
     return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/myvoice_selfhost_refs"];

@@ -572,6 +572,79 @@ static void MVTTSCachePut(NSString *key, NSData *pcm) {
     }] resume];
 }
 
+// ★ 2.8.37：同步自建服务器音色库（GET {selfHostURL}/voicebank）。
+//   把电脑上 server.py 的 voices/<名字> 与模型预置音色拉到手机，存进共享域 selfHostVoices；
+//   面板 voiceList 会合并它们，选中即免上传参考音频直接用（合成发 voice=<id>，服务端自己读 ref.wav）。
+- (void)syncServerVoicesWithCompletion:(void(^)(NSInteger count, NSError* err))completion {
+    if (!completion) return;
+    if (!MVSelfHostEnabled()) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(0, MVErr(@"未开启「自建服务器」通道（设置 → 我的语音 → 发音通道 → 自建·免费）"));
+        });
+        return;
+    }
+    NSString *url = [MVSelfHostURL() stringByAppendingString:@"/voicebank"];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
+    req.HTTPMethod = @"GET";
+    NSString *tok = MVSelfHostToken();
+    if (tok.length) [req setValue:tok forHTTPHeaderField:@"X-Token"];
+    req.timeoutInterval = 20;
+    MVLog(@"[selfhost] 同步音色库 %@", MVMaskHost(url));
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e){
+        if (e) {
+            MVLog(@"[selfhost] 同步网络错误 %@", e);
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(0, e); });
+            return;
+        }
+        NSInteger code = [(NSHTTPURLResponse*)r statusCode];
+        if (code != 200) {
+            NSString *msg = [[NSString alloc] initWithData:d ?: [NSData data] encoding:NSUTF8StringEncoding];
+            MVLog(@"[selfhost] 同步 HTTP %ld %@", (long)code, msg);
+            NSError *err = MVErr([NSString stringWithFormat:
+                @"自建服务器返回 %ld：%@（确认 server.py 已启动 / ECS 中转已通 / 地址正确）",
+                (long)code, msg.length ? msg : @"未知错误"]);
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(0, err); });
+            return;
+        }
+        NSError *je = nil;
+        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:d options:0 error:&je];
+        if (!json || ![json isKindOfClass:[NSDictionary class]]) {
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(0, MVErr(@"音色库数据解析失败（非 JSON？）")); });
+            return;
+        }
+        NSMutableArray *out = [NSMutableArray array];
+        NSArray *presets = [json[@"presets"] isKindOfClass:[NSArray class]] ? json[@"presets"] : @[]];
+        for (NSDictionary *p in presets) {
+            NSString *pid = [p[@"id"] isKindOfClass:[NSString class]] ? p[@"id"] : nil;
+            if (!pid.length) continue;
+            [out addObject:@{
+                @"name":     [p[@"label"] isKindOfClass:[NSString class]] ? p[@"label"] : pid,
+                @"voiceID":  pid,
+                @"provider": @0,
+                @"serverVoice": @YES,
+                @"model":    @"cosyvoice-v3.5-plus",
+                @"type":     @"preset"}];
+        }
+        NSArray *clones = [json[@"clones"] isKindOfClass:[NSArray class]] ? json[@"clones"] : @[];
+        for (NSDictionary *c in clones) {
+            NSString *cid = [c[@"id"] isKindOfClass:[NSString class]] ? c[@"id"] : nil;
+            if (!cid.length) continue;
+            [out addObject:@{
+                @"name":     [c[@"label"] isKindOfClass:[NSString class]] ? c[@"label"] : cid,
+                @"voiceID":  cid,
+                @"provider": @0,
+                @"serverVoice": @YES,
+                @"model":    @"cosyvoice-v3.5-plus",
+                @"type":     @"clone",
+                @"has_ref":  c[@"has_ref"] ?: @NO,
+                @"ref_text": [c[@"ref_text"] isKindOfClass:[NSString class]] ? c[@"ref_text"] : @""}];
+        }
+        MVSetServerVoices(out);
+        MVLog(@"[selfhost] 同步到 %lu 个服务器音色", (unsigned long)out.count);
+        dispatch_async(dispatch_get_main_queue(), ^{ completion((NSInteger)out.count, nil); });
+    }] resume];
+}
+
 // ---- RIFF 小工具 ----
 static inline uint16_t MVrd16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 static inline uint32_t MVrd32(const uint8_t *p) {
